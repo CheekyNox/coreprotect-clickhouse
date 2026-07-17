@@ -1,8 +1,10 @@
 package net.coreprotect.utility;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
 import java.util.Arrays;
@@ -22,6 +24,19 @@ class DatabaseUtilsTest {
     void decodesClickHousePrimitiveArray() throws Exception {
         assertArrayEquals(new byte[] { 1, -1 },
                 DatabaseUtils.decodeClickHouseBinary(new byte[] { 0, 1, -1 }, "metadata"));
+    }
+
+    @Test
+    void decodesClickHouseArrayStringFallback() throws Exception {
+        assertArrayEquals(new byte[] { (byte) 0xAC, (byte) 0xED },
+                DatabaseUtils.decodeClickHouseBinary("[0, -84, -19]", "metadata"));
+    }
+
+    @Test
+    void detectsClickHouseArrayTypeNames() {
+        assertTrue(DatabaseUtils.isClickHouseArrayTypeName("Array(Int8)"));
+        assertTrue(DatabaseUtils.isClickHouseArrayTypeName("Nullable(Array(Int8))"));
+        assertFalse(DatabaseUtils.isClickHouseArrayTypeName("String"));
     }
 
     @Test

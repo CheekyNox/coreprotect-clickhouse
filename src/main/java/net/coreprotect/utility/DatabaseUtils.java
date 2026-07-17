@@ -3,9 +3,11 @@ package net.coreprotect.utility;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
@@ -30,16 +32,8 @@ public class DatabaseUtils {
 
     public static byte[] getBytes(ResultSet resultSet, String column) throws SQLException {
         int columnIndex = resultSet.findColumn(column);
-        if (ConfigHandler.databaseType.isClickHouse() && resultSet.getMetaData().getColumnType(columnIndex) == Types.ARRAY) {
-            Object value;
-            try {
-                value = resultSet.getObject(columnIndex, Object.class);
-            }
-            catch (SQLFeatureNotSupportedException e) {
-                java.sql.Array array = resultSet.getArray(columnIndex);
-                value = array == null ? null : array.getArray();
-            }
-            return decodeClickHouseBinary(value, column);
+        if (ConfigHandler.databaseType.isClickHouse() && isClickHouseBinaryArray(resultSet, columnIndex)) {
+            return decodeClickHouseBinary(clickHouseBinaryValue(resultSet, columnIndex), column);
         }
 
         byte[] value;
@@ -47,9 +41,81 @@ public class DatabaseUtils {
             value = resultSet.getBytes(column);
         }
         catch (SQLFeatureNotSupportedException e) {
-            value = resultSet.getBytes(columnIndex);
+            try {
+                value = resultSet.getBytes(columnIndex);
+            }
+            catch (SQLException inner) {
+                if (ConfigHandler.databaseType.isClickHouse() && isClickHouseBinaryReadException(inner)) {
+                    return decodeClickHouseBinary(clickHouseBinaryValue(resultSet, columnIndex), column);
+                }
+                throw inner;
+            }
+        }
+        catch (SQLException e) {
+            if (ConfigHandler.databaseType.isClickHouse() && isClickHouseBinaryReadException(e)) {
+                return decodeClickHouseBinary(clickHouseBinaryValue(resultSet, columnIndex), column);
+            }
+            throw e;
         }
         return value;
+    }
+
+    private static boolean isClickHouseBinaryArray(ResultSet resultSet, int columnIndex) throws SQLException {
+        ResultSetMetaData metadata = resultSet.getMetaData();
+        if (metadata.getColumnType(columnIndex) == Types.ARRAY) {
+            return true;
+        }
+
+        String typeName = metadata.getColumnTypeName(columnIndex);
+        return isClickHouseArrayTypeName(typeName);
+    }
+
+    static boolean isClickHouseArrayTypeName(String typeName) {
+        if (typeName == null) {
+            return false;
+        }
+        String normalized = typeName.replace(" ", "");
+        return normalized.startsWith("Array(") || normalized.startsWith("Nullable(Array(");
+    }
+
+    private static boolean isClickHouseBinaryReadException(SQLException exception) {
+        String message = exception.getMessage();
+        return message != null && message.contains("Column is not of array type");
+    }
+
+    private static Object clickHouseBinaryValue(ResultSet resultSet, int columnIndex) throws SQLException {
+        SQLException failure = null;
+
+        try {
+            return resultSet.getObject(columnIndex);
+        }
+        catch (SQLException e) {
+            failure = e;
+        }
+
+        try {
+            return resultSet.getObject(columnIndex, Object.class);
+        }
+        catch (SQLException e) {
+            failure.addSuppressed(e);
+        }
+
+        try {
+            java.sql.Array array = resultSet.getArray(columnIndex);
+            return array == null ? null : array.getArray();
+        }
+        catch (SQLException e) {
+            failure.addSuppressed(e);
+        }
+
+        try {
+            return parseClickHouseArrayString(resultSet.getString(columnIndex));
+        }
+        catch (SQLException e) {
+            failure.addSuppressed(e);
+        }
+
+        throw failure;
     }
 
     static byte[] decodeClickHouseBinary(Object rawValue, String column) throws SQLException {
@@ -84,6 +150,9 @@ public class DatabaseUtils {
                 value[i] = clickHouseByte(java.lang.reflect.Array.get(rawValue, i), column);
             }
         }
+        else if (rawValue instanceof String) {
+            return decodeClickHouseBinary(parseClickHouseArrayString((String) rawValue), column);
+        }
         else {
             throw new SQLException("Unsupported ClickHouse binary value for column " + column + ": " + rawValue.getClass().getName());
         }
@@ -108,6 +177,34 @@ public class DatabaseUtils {
             throw new SQLException("ClickHouse binary element out of Int8 range for column " + column + ": " + number);
         }
         return (byte) number;
+    }
+
+    private static List<Integer> parseClickHouseArrayString(String value) throws SQLException {
+        if (value == null) {
+            return null;
+        }
+
+        String trimmed = value.trim();
+        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+            throw new SQLException("Invalid ClickHouse binary array string: " + value);
+        }
+
+        String body = trimmed.substring(1, trimmed.length() - 1).trim();
+        List<Integer> result = new ArrayList<>();
+        if (body.isEmpty()) {
+            return result;
+        }
+
+        String[] parts = body.split(",");
+        for (String part : parts) {
+            try {
+                result.add(Integer.parseInt(part.trim()));
+            }
+            catch (NumberFormatException e) {
+                throw new SQLException("Invalid ClickHouse binary array element: " + part, e);
+            }
+        }
+        return result;
     }
 
     public static String caseInsensitiveEquals(String column) {
