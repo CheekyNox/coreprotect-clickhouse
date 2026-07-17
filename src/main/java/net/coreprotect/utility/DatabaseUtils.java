@@ -6,6 +6,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
+import java.util.List;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
@@ -29,6 +30,18 @@ public class DatabaseUtils {
 
     public static byte[] getBytes(ResultSet resultSet, String column) throws SQLException {
         int columnIndex = resultSet.findColumn(column);
+        if (ConfigHandler.databaseType.isClickHouse() && resultSet.getMetaData().getColumnType(columnIndex) == Types.ARRAY) {
+            Object value;
+            try {
+                value = resultSet.getObject(columnIndex, Object.class);
+            }
+            catch (SQLFeatureNotSupportedException e) {
+                java.sql.Array array = resultSet.getArray(columnIndex);
+                value = array == null ? null : array.getArray();
+            }
+            return decodeClickHouseBinary(value, column);
+        }
+
         byte[] value;
         try {
             value = resultSet.getBytes(column);
@@ -36,9 +49,45 @@ public class DatabaseUtils {
         catch (SQLFeatureNotSupportedException e) {
             value = resultSet.getBytes(columnIndex);
         }
-        if (!ConfigHandler.databaseType.isClickHouse() || resultSet.getMetaData().getColumnType(columnIndex) != Types.ARRAY || value == null) {
-            return value;
+        return value;
+    }
+
+    static byte[] decodeClickHouseBinary(Object rawValue, String column) throws SQLException {
+        if (rawValue == null) {
+            return null;
         }
+        if (rawValue instanceof java.sql.Array) {
+            java.sql.Array array = (java.sql.Array) rawValue;
+            try {
+                return decodeClickHouseBinary(array.getArray(), column);
+            }
+            finally {
+                array.free();
+            }
+        }
+
+        byte[] value;
+        if (rawValue instanceof byte[]) {
+            value = (byte[]) rawValue;
+        }
+        else if (rawValue instanceof List<?>) {
+            List<?> values = (List<?>) rawValue;
+            value = new byte[values.size()];
+            for (int i = 0; i < values.size(); i++) {
+                value[i] = clickHouseByte(values.get(i), column);
+            }
+        }
+        else if (rawValue.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(rawValue);
+            value = new byte[length];
+            for (int i = 0; i < length; i++) {
+                value[i] = clickHouseByte(java.lang.reflect.Array.get(rawValue, i), column);
+            }
+        }
+        else {
+            throw new SQLException("Unsupported ClickHouse binary value for column " + column + ": " + rawValue.getClass().getName());
+        }
+
         if (value.length == 0) {
             return null;
         }
@@ -48,6 +97,17 @@ public class DatabaseUtils {
         byte[] binary = new byte[value.length - 1];
         System.arraycopy(value, 1, binary, 0, binary.length);
         return binary;
+    }
+
+    private static byte clickHouseByte(Object value, String column) throws SQLException {
+        if (!(value instanceof Number)) {
+            throw new SQLException("Invalid ClickHouse binary element for column " + column + ": " + String.valueOf(value));
+        }
+        int number = ((Number) value).intValue();
+        if (number < Byte.MIN_VALUE || number > Byte.MAX_VALUE) {
+            throw new SQLException("ClickHouse binary element out of Int8 range for column " + column + ": " + number);
+        }
+        return (byte) number;
     }
 
     public static String caseInsensitiveEquals(String column) {
