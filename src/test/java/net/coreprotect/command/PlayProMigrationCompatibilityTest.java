@@ -111,6 +111,19 @@ class PlayProMigrationCompatibilityTest {
         }
     }
 
+    @Test
+    void remapsDuplicateContainerRowidsWithoutDroppingRows() {
+        String sql = PlayProMigrationCommand.containerRepairInsertSql(
+                "events", "staging", "high_water",
+                List.of("dataset_id", "producer_sequence", "batch_id", "batch_ordinal", "family", "rowid", "time"));
+
+        assertTrue(sql.contains("PARTITION BY rowid"));
+        assertTrue(sql.contains("if(duplicate_ordinal=1,source_rowid,max_family_rowid+repair_ordinal)"));
+        assertTrue(sql.contains("toUInt64(1002)"));
+        assertTrue(sql.contains("00000000-0000-0000-0000-000000001002"));
+        assertTrue(sql.contains("SELECT ifNull(max(rowid),0) FROM high_water WHERE family='container'"));
+    }
+
     private static int occurrences(String value, String needle) {
         int result = 0;
         int offset = 0;

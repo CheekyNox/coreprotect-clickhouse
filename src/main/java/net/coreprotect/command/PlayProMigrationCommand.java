@@ -31,6 +31,8 @@ import net.kyori.adventure.text.format.NamedTextColor;
 public final class PlayProMigrationCommand {
 
     private static final String MIGRATION_RESOURCE = "/migration/playpro-clickhouse-migration.sql";
+    private static final long CONTAINER_REPAIR_SEQUENCE = 1002L;
+    private static final String CONTAINER_REPAIR_BATCH_ID = "00000000-0000-0000-0000-000000001002";
     private static final List<String> ARCHIVE_TABLES = List.of(
             "art_map", "block", "chat", "command", "container", "entity_container",
             "entity_interaction", "item", "database_lock", "entity", "entity_spawn",
@@ -183,6 +185,7 @@ public final class PlayProMigrationCommand {
                     runMigrationSql(connection, options, sender);
                 }
                 reconcileUsernameLogRows(connection, options, sender);
+                reconcileContainerRowIds(connection, options, sender);
                 verifyMigratedRows(connection, options);
                 ok(sender, "Verified migrated row counts for every PlayPro event family.");
                 PlayProMetadataRepairCommand.repair(connection, options.database, options.livePrefix, sender);
@@ -721,6 +724,153 @@ public final class PlayProMigrationCommand {
                 + "row_number() OVER (ORDER BY time,rowid,toString(uuid),user) AS source_ordinal,"
                 + "max(rowid) OVER () AS max_source_rowid FROM " + source + ") AS source_rows "
                 + "CROSS JOIN (SELECT any(dataset_id) AS dataset_id,any(producer_id) AS producer_id FROM " + storage + ") AS identity";
+    }
+
+    private static void reconcileContainerRowIds(Connection connection, MigrationOptions options, CommandSender sender) throws SQLException {
+        String events = qualified(options.database, options.livePrefix + "event_data");
+        String staging = qualified(options.database, options.livePrefix + "migration_rowid_repair_container");
+        String highWater = qualified(options.database, options.livePrefix + "retention_high_water");
+        boolean resume = tableExists(connection, options.database, options.livePrefix + "migration_rowid_repair_container");
+        if (resume && count(connection, staging) == 0) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("DROP TABLE " + staging + " SYNC");
+            }
+            resume = false;
+        }
+
+        if (!resume) {
+            List<Long> duplicateRowIds = duplicateRowIds(connection, events, "container");
+            if (duplicateRowIds.isEmpty()) {
+                return;
+            }
+            String duplicateValues = duplicateRowIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+            String createStaging = "CREATE TABLE " + staging + " ENGINE=MergeTree ORDER BY (rowid,time,wid,x,z) AS "
+                    + "SELECT * FROM " + events + " WHERE family='container' AND rowid IN(" + duplicateValues + ")";
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(createStaging);
+            }
+            ok(sender, "Saved " + count(connection, staging) + " container rows with duplicate rowids for safe repair.");
+        }
+        else {
+            ok(sender, "Resuming interrupted container rowid repair from " + staging + ".");
+        }
+
+        List<Long> duplicateRowIds = distinctRowIds(connection, staging);
+        long stagedRows = count(connection, staging);
+        if (stagedRows <= duplicateRowIds.size()) {
+            throw new SQLException("Container rowid repair staging table does not contain duplicate rows");
+        }
+        long expectedRows = countSourceRows(connection, options, "container");
+        String duplicateValues = duplicateRowIds.stream().map(String::valueOf).collect(Collectors.joining(","));
+        String deleteRows = "ALTER TABLE " + events + " DELETE WHERE family='container' AND (rowid IN("
+                + duplicateValues + ") OR batch_id=toUUID('" + CONTAINER_REPAIR_BATCH_ID + "')) SETTINGS mutations_sync=2";
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(deleteRows);
+            statement.execute(containerRepairInsertSql(events, staging, highWater, eventDataColumnNames(connection, options)));
+        }
+
+        long repairedRows = countFamilyRows(connection, events, "container");
+        List<Long> remainingDuplicates = duplicateRowIds(connection, events, "container");
+        if (repairedRows != expectedRows || !remainingDuplicates.isEmpty()) {
+            throw new SQLException("Container rowid repair verification failed: source=" + expectedRows
+                    + ", target=" + repairedRows + ", duplicate_keys=" + remainingDuplicates.size());
+        }
+
+        updateHighWater(connection, options, "container", CONTAINER_REPAIR_SEQUENCE);
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("DROP TABLE " + staging + " SYNC");
+        }
+        ok(sender, "Preserved all " + stagedRows + " container rows by remapping "
+                + duplicateRowIds.size() + " duplicate rowids.");
+    }
+
+    private static List<Long> duplicateRowIds(Connection connection, String events, String family) throws SQLException {
+        String sql = "SELECT rowid FROM " + events + " WHERE family=" + sqlString(family)
+                + " GROUP BY rowid HAVING count()>1 ORDER BY rowid";
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+            List<Long> rowIds = new ArrayList<>();
+            while (resultSet.next()) {
+                rowIds.add(resultSet.getLong(1));
+            }
+            return rowIds;
+        }
+    }
+
+    private static List<Long> distinctRowIds(Connection connection, String table) throws SQLException {
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT DISTINCT rowid FROM " + table + " ORDER BY rowid")) {
+            List<Long> rowIds = new ArrayList<>();
+            while (resultSet.next()) {
+                rowIds.add(resultSet.getLong(1));
+            }
+            return rowIds;
+        }
+    }
+
+    private static long countFamilyRows(Connection connection, String events, String family) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events + " WHERE family=?")) {
+            statement.setString(1, family);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    throw new SQLException("ClickHouse did not return a target count for family " + family);
+                }
+                return resultSet.getLong(1);
+            }
+        }
+    }
+
+    private static List<String> eventDataColumnNames(Connection connection, MigrationOptions options) throws SQLException {
+        String sql = "SELECT name FROM system.columns WHERE database=? AND table=? "
+                + "AND default_kind NOT IN('ALIAS','MATERIALIZED') ORDER BY position";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, options.database);
+            statement.setString(2, options.livePrefix + "event_data");
+            try (ResultSet resultSet = statement.executeQuery()) {
+                List<String> columns = new ArrayList<>();
+                while (resultSet.next()) {
+                    columns.add(resultSet.getString(1));
+                }
+                if (columns.isEmpty()) {
+                    throw new SQLException("ClickHouse did not return event_data columns for container repair");
+                }
+                return columns;
+            }
+        }
+    }
+
+    static String containerRepairInsertSql(String events, String staging, String highWater, List<String> columns) {
+        String insertColumns = columns.stream().map(PlayProMigrationCommand::quote).collect(Collectors.joining(","));
+        String selectColumns = columns.stream().map(column -> switch (column) {
+            case "producer_sequence" -> "toUInt64(" + CONTAINER_REPAIR_SEQUENCE + ")";
+            case "batch_id" -> "toUUID('" + CONTAINER_REPAIR_BATCH_ID + "')";
+            case "batch_ordinal" -> "toUInt32(repair_ordinal-1)";
+            case "rowid" -> "if(duplicate_ordinal=1,source_rowid,max_family_rowid+repair_ordinal)";
+            default -> "repair." + quote(column);
+        }).collect(Collectors.joining(","));
+        String order = "rowid,time,wid,x,ifNull(y,0),z,ifNull(type,0),ifNull(data,0),"
+                + "ifNull(amount,0),ifNull(action,0),ifNull(user_id,0),ifNull(metadata,'')";
+        return "INSERT INTO " + events + " (" + insertColumns + ") SELECT " + selectColumns
+                + " FROM (SELECT staged.*,staged.rowid AS source_rowid,"
+                + "row_number() OVER (PARTITION BY rowid ORDER BY " + order + ") AS duplicate_ordinal,"
+                + "row_number() OVER (ORDER BY " + order + ") AS repair_ordinal,"
+                + "greatest((SELECT ifNull(max(rowid),0) FROM " + events + " WHERE family='container'),"
+                + "(SELECT ifNull(max(rowid),0) FROM " + highWater + " WHERE family='container')) AS max_family_rowid "
+                + "FROM " + staging + " AS staged) AS repair";
+    }
+
+    private static void updateHighWater(Connection connection, MigrationOptions options, String family, long producerSequence) throws SQLException {
+        String events = qualified(options.database, options.livePrefix + "event_data");
+        String highWater = qualified(options.database, options.livePrefix + "retention_high_water");
+        String storage = qualified(options.database, options.livePrefix + "storage_metadata");
+        String sql = "INSERT INTO " + highWater
+                + " (dataset_id,producer_id,producer_sequence,family,rowid,recorded_at) "
+                + "SELECT identity.dataset_id,identity.producer_id," + producerSequence + "," + sqlString(family)
+                + ",marks.rowid,now64(3,'UTC') FROM (SELECT max(rowid) AS rowid FROM " + events
+                + " WHERE family=" + sqlString(family) + ") AS marks CROSS JOIN "
+                + "(SELECT any(dataset_id) AS dataset_id,any(producer_id) AS producer_id FROM " + storage + ") AS identity "
+                + "WHERE marks.rowid>(SELECT ifNull(max(rowid),0) FROM " + highWater + " WHERE family=" + sqlString(family) + ")";
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(sql);
+        }
     }
 
     static void verifyOfficialLookupShapes(Connection connection, String database, String prefix) throws SQLException {
