@@ -7,10 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -684,33 +682,23 @@ public final class PlayProMigrationCommand {
     }
 
     private static void verifyOfficialByteColumn(Connection connection, String sql, String column, String label) throws SQLException {
-        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+        String quotedColumn = quote(column);
+        String validationSql = "SELECT toTypeName(" + quotedColumn + "),"
+                + "if(empty(" + quotedColumn + "),1,toUInt8(arrayElement(" + quotedColumn + ",1)=toInt8(0))) "
+                + "FROM (" + sql + ") LIMIT 1";
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(validationSql)) {
             if (!resultSet.next()) {
                 return;
             }
-            int columnIndex = jdbcColumnIndex(resultSet.getMetaData(), column);
-            int columnType = resultSet.getMetaData().getColumnType(columnIndex);
-            if (columnType != Types.ARRAY) {
-                throw new SQLException("Official PlayPro " + label + " is not readable as ClickHouse binary: expected JDBC ARRAY for "
-                        + column + ", found JDBC type " + columnType);
+            String columnType = resultSet.getString(1);
+            if (!"Array(Int8)".equals(columnType)) {
+                throw new SQLException("Official PlayPro " + label + " is not readable as ClickHouse binary: expected Array(Int8) for "
+                        + column + ", found " + columnType);
             }
-            byte[] value = resultSet.getBytes(columnIndex);
-            if (value != null && value.length > 0 && value[0] != 0) {
+            if (resultSet.getInt(2) != 1) {
                 throw new SQLException("Official PlayPro " + label + " has invalid ClickHouse binary presence marker");
             }
         }
-    }
-
-    static int jdbcColumnIndex(ResultSetMetaData metadata, String column) throws SQLException {
-        int columnCount = metadata.getColumnCount();
-        for (int index = 1; index <= columnCount; index++) {
-            String label = metadata.getColumnLabel(index);
-            String name = metadata.getColumnName(index);
-            if (column.equalsIgnoreCase(label) || column.equalsIgnoreCase(name)) {
-                return index;
-            }
-        }
-        throw new SQLException("Result has no column named " + column);
     }
 
     private static String officialRawLookupUnionSql(String database, String prefix) {

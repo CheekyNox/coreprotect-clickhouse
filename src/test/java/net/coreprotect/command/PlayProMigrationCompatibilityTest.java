@@ -3,15 +3,11 @@ package net.coreprotect.command;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.ObjectInputStream;
-import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
-import java.sql.ResultSetMetaData;
-import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -95,26 +91,6 @@ class PlayProMigrationCompatibilityTest {
         String storedValue = new String(original, StandardCharsets.ISO_8859_1);
 
         assertArrayEquals(original, PlayProMetadataRepairCommand.restoreIsoBlob(storedValue));
-    }
-
-    @Test
-    void resolvesJdbcColumnsUsingOneBasedMetadataIndexes() throws Exception {
-        ResultSetMetaData metadata = metadata("metadata", "blockdata");
-
-        assertEquals(1, PlayProMigrationCommand.jdbcColumnIndex(metadata, "metadata"));
-        assertEquals(2, PlayProMigrationCommand.jdbcColumnIndex(metadata, "blockdata"));
-        assertThrows(SQLException.class, () -> PlayProMigrationCommand.jdbcColumnIndex(metadata, "missing"));
-    }
-
-    private static ResultSetMetaData metadata(String... labels) {
-        return (ResultSetMetaData) Proxy.newProxyInstance(
-                PlayProMigrationCompatibilityTest.class.getClassLoader(),
-                new Class<?>[] { ResultSetMetaData.class },
-                (proxy, method, arguments) -> switch (method.getName()) {
-                    case "getColumnCount" -> labels.length;
-                    case "getColumnLabel", "getColumnName" -> labels[(Integer) arguments[0] - 1];
-                    default -> throw new UnsupportedOperationException(method.getName());
-                });
     }
 
     private static int occurrences(String value, String needle) {
