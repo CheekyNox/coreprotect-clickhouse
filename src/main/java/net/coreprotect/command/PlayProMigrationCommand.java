@@ -36,6 +36,8 @@ public final class PlayProMigrationCommand {
             "entity_interaction", "item", "database_lock", "entity", "entity_spawn",
             "entity_map", "material_map", "blockdata_map", "session", "sign", "skull",
             "user", "username_log", "version", "world");
+    private static final List<String> PHYSICAL_TARGET_TABLES = List.of(
+            "storage_metadata", "writer_registration", "retention_high_water", "event_data");
     private static final List<String> MIGRATED_FAMILIES = List.of(
             "art_map", "block", "chat", "command", "container", "entity_container",
             "entity_interaction", "item", "entity", "entity_spawn", "entity_map",
@@ -110,6 +112,10 @@ public final class PlayProMigrationCommand {
             error(sender, "Archive prefix cannot be the same as the live prefix.");
             return;
         }
+        if (options.rebuild && options.sourcePrefix.equals(options.livePrefix)) {
+            error(sender, "Rebuild mode requires source-prefix to point at archived old tables, not the live prefix.");
+            return;
+        }
 
         ConfigHandler.migrationRunning = true;
         Thread migrationThread = new Thread(() -> runMigration(sender, options));
@@ -120,7 +126,12 @@ public final class PlayProMigrationCommand {
             error(sender, "Migration failed unexpectedly. Logging remains paused; keep the server in maintenance and see console for details.");
         });
         migrationThread.start();
-        ok(sender, "Started in-place PlayPro migration in " + options.database + ". Old tables will be archived as " + options.archivePrefix + "*.");
+        if (options.rebuild) {
+            ok(sender, "Started PlayPro rebuild in " + options.database + " from archived source prefix " + options.sourcePrefix + ".");
+        }
+        else {
+            ok(sender, "Started in-place PlayPro migration in " + options.database + ". Old tables will be archived as " + options.archivePrefix + "*.");
+        }
     }
 
     private static void runMigration(CommandSender sender, MigrationOptions options) {
@@ -135,18 +146,26 @@ public final class PlayProMigrationCommand {
                     throw new SQLException("Unable to open ClickHouse connection");
                 }
                 requireClickHouseVersion(connection);
-                requireSourceTables(connection, options);
-                requireArchiveTablesFree(connection, options);
                 requireTargetDatabaseEngine(connection, options);
+                if (options.rebuild) {
+                    requireSourceTables(connection, options, options.sourcePrefix);
+                    archiveExistingPlayProTarget(connection, options);
+                }
+                else {
+                    requireSourceTables(connection, options, options.livePrefix);
+                    requireArchiveTablesFree(connection, options);
+                    archiveSourceTables(connection, options);
+                }
                 bootstrapTargetSchema(connection, options);
                 requireTargetReady(connection, options);
-                archiveSourceTables(connection, options);
                 recreateCompatibilityViews(connection, options.database, options.livePrefix);
                 ok(sender, "Created official PlayPro compatibility views.");
                 runMigrationSql(connection, options, sender);
                 verifyMigratedRows(connection, options);
                 ok(sender, "Verified migrated row counts for every PlayPro event family.");
                 PlayProMetadataRepairCommand.repair(connection, options.database, options.livePrefix, sender);
+                verifyOfficialLookupShapes(connection, options);
+                ok(sender, "Verified official PlayPro lookup column shapes.");
             }
 
             success = true;
@@ -189,11 +208,11 @@ public final class PlayProMigrationCommand {
         }
     }
 
-    private static void requireSourceTables(Connection connection, MigrationOptions options) throws SQLException {
+    private static void requireSourceTables(Connection connection, MigrationOptions options, String sourcePrefix) throws SQLException {
         List<String> missing = new ArrayList<>();
         for (String table : ARCHIVE_TABLES) {
-            if (!tableExists(connection, options.database, options.livePrefix + table)) {
-                missing.add(options.livePrefix + table);
+            if (!tableExists(connection, options.database, sourcePrefix + table)) {
+                missing.add(sourcePrefix + table);
             }
         }
         if (!missing.isEmpty()) {
@@ -360,6 +379,40 @@ public final class PlayProMigrationCommand {
         }
     }
 
+    private static void archiveExistingPlayProTarget(Connection connection, MigrationOptions options) throws SQLException {
+        String timestamp = String.valueOf(System.currentTimeMillis());
+        List<String> renameTargets = new ArrayList<>();
+        for (String table : PHYSICAL_TARGET_TABLES) {
+            String liveTable = options.livePrefix + table;
+            if (tableExists(connection, options.database, liveTable)) {
+                renameTargets.add(qualified(options.database, liveTable) + " TO "
+                        + qualified(options.database, options.livePrefix + "broken_playpro_" + timestamp + "_" + table));
+            }
+        }
+        for (String table : ARCHIVE_TABLES) {
+            String liveTable = options.livePrefix + table;
+            String engine = tableEngine(connection, options.database, liveTable);
+            if (engine == null) {
+                continue;
+            }
+            if ("View".equals(engine)) {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("DROP VIEW " + qualified(options.database, liveTable));
+                }
+            }
+            else {
+                renameTargets.add(qualified(options.database, liveTable) + " TO "
+                        + qualified(options.database, options.livePrefix + "broken_playpro_" + timestamp + "_" + table));
+            }
+        }
+        if (!renameTargets.isEmpty()) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("RENAME TABLE " + String.join(", ", renameTargets));
+            }
+            CoreProtect.getInstance().getSLF4JLogger().info("[PlayPro migration] Archived existing PlayPro target objects with marker broken_playpro_{}.", timestamp);
+        }
+    }
+
     private static boolean tableExists(Connection connection, String database, String table) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM system.tables WHERE database=? AND name=? LIMIT 1")) {
             statement.setString(1, database);
@@ -403,7 +456,7 @@ public final class PlayProMigrationCommand {
     private static void verifyMigratedRows(Connection connection, MigrationOptions options) throws SQLException {
         String events = qualified(options.database, options.livePrefix + "event_data");
         for (String family : MIGRATED_FAMILIES) {
-            String source = qualified(options.database, options.archivePrefix + family);
+            String source = qualified(options.database, options.sourcePrefix + family);
             long sourceRows = count(connection, source + (FINAL_SOURCE_FAMILIES.contains(family) ? " FINAL" : ""));
             long targetRows;
             try (PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events + " WHERE family=?")) {
@@ -430,6 +483,42 @@ public final class PlayProMigrationCommand {
             long duplicates = resultSet.getLong(1);
             if (duplicates > 0) {
                 throw new SQLException("PlayPro migration produced " + duplicates + " duplicate family/rowid keys");
+            }
+        }
+    }
+
+    private static void verifyOfficialLookupShapes(Connection connection, MigrationOptions options) throws SQLException {
+        String block = qualified(options.database, options.livePrefix + "block");
+        String container = qualified(options.database, options.livePrefix + "container");
+        String entityContainer = qualified(options.database, options.livePrefix + "entity_container");
+        String item = qualified(options.database, options.livePrefix + "item");
+        String entityInteraction = qualified(options.database, options.livePrefix + "entity_interaction");
+        String entitySpawn = qualified(options.database, options.livePrefix + "entity_spawn");
+        verifyOptionalType(connection,
+                "SELECT toTypeName(metadata) FROM ("
+                        + "(SELECT meta AS metadata FROM " + block + " LIMIT 1)"
+                        + " UNION ALL (SELECT metadata FROM " + container + " LIMIT 1)"
+                        + " UNION ALL (SELECT metadata FROM " + entityContainer + " LIMIT 1)"
+                        + " UNION ALL (SELECT data AS metadata FROM " + item + " LIMIT 1)"
+                        + " UNION ALL (SELECT metadata FROM " + entityInteraction + " LIMIT 1)"
+                        + ") LIMIT 1",
+                "Array(Int8)", "lookup metadata union");
+        verifyOptionalType(connection,
+                "SELECT toTypeName(blockdata) FROM " + block + " LIMIT 1",
+                "Array(Int8)", "block blockdata lookup");
+        verifyOptionalType(connection,
+                "SELECT toTypeName(data) FROM " + entitySpawn + " LIMIT 1",
+                "Array(Int8)", "entity spawn data lookup");
+    }
+
+    private static void verifyOptionalType(Connection connection, String sql, String expectedType, String label) throws SQLException {
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+            if (!resultSet.next()) {
+                return;
+            }
+            String actualType = resultSet.getString(1);
+            if (!expectedType.equals(actualType)) {
+                throw new SQLException("Official PlayPro " + label + " has incompatible type: expected " + expectedType + ", found " + actualType);
             }
         }
     }
@@ -462,7 +551,7 @@ public final class PlayProMigrationCommand {
             }
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 String sql = reader.lines().collect(Collectors.joining("\n"));
-                sql = sql.replace("kostya.co_", options.database + "." + options.archivePrefix);
+                sql = sql.replace("kostya.co_", options.database + "." + options.sourcePrefix);
                 sql = sql.replace("coreprotect_playpro.co_", options.database + "." + options.livePrefix);
                 sql = sql.replace("CREATE DATABASE IF NOT EXISTS coreprotect_playpro ENGINE = Atomic;", "");
                 return sql;
@@ -717,18 +806,21 @@ public final class PlayProMigrationCommand {
     }
 
     private static void usage(CommandSender sender) {
-        sender.sendMessage(Component.text("Usage: /co migrate-playpro [database:kostya] [prefix:co_] [archive-prefix:co_migrate_]", NamedTextColor.YELLOW));
+        sender.sendMessage(Component.text("Usage: /co migrate-playpro [database:kostya] [prefix:co_] [archive-prefix:co_migrate_] [rebuild:true source-prefix:co_migrate_]", NamedTextColor.YELLOW));
     }
 
     private record ExpectedColumn(String tableSuffix, String name, String type) {
     }
 
-    private record MigrationOptions(String database, String livePrefix, String archivePrefix) {
+    private record MigrationOptions(String database, String livePrefix, String archivePrefix, String sourcePrefix, boolean rebuild) {
 
         private static MigrationOptions parse(String[] commandArgs) {
             String database = ConfigHandler.database;
             String livePrefix = ConfigHandler.prefix;
             String archivePrefix = livePrefix + "migrate_";
+            String sourcePrefix = null;
+            boolean sourcePrefixConfigured = false;
+            boolean rebuild = false;
 
             for (int i = 1; i < commandArgs.length; i++) {
                 String arg = commandArgs[i].trim();
@@ -748,14 +840,23 @@ public final class PlayProMigrationCommand {
                         archivePrefix = value + "migrate_";
                     }
                     case "archive-prefix" -> archivePrefix = value;
+                    case "source-prefix" -> {
+                        sourcePrefix = value;
+                        sourcePrefixConfigured = true;
+                    }
+                    case "rebuild" -> rebuild = Boolean.parseBoolean(value);
                     default -> throw new IllegalArgumentException("Unknown argument: " + key);
                 }
             }
 
+            if (!sourcePrefixConfigured) {
+                sourcePrefix = archivePrefix;
+            }
             validateIdentifier(database, "database");
             validatePrefix(livePrefix, "prefix");
             validatePrefix(archivePrefix, "archive prefix");
-            return new MigrationOptions(database, livePrefix, archivePrefix);
+            validatePrefix(sourcePrefix, "source prefix");
+            return new MigrationOptions(database, livePrefix, archivePrefix, sourcePrefix, rebuild);
         }
 
         private static void validateIdentifier(String value, String name) {
