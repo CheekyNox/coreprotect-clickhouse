@@ -257,6 +257,10 @@ public final class PlayProMetadataRepairCommand {
                     }
                 }
             }
+            catch (SQLException exception) {
+                debugSqlFailure("repairJsonItemRows family=" + family + " column=" + column + " cursor=" + cursor, sql, exception);
+                throw exception;
+            }
             if (rows.isEmpty()) {
                 return total;
             }
@@ -809,6 +813,20 @@ public final class PlayProMetadataRepairCommand {
             builder.append(Character.forDigit(value & 0xF, 16));
         }
         return builder.toString();
+    }
+
+    private static void debugSqlFailure(String label, String sql, SQLException exception) {
+        CoreProtect.getInstance().getSLF4JLogger().error("[PlayPro metadata repair debug] {} failed: {}", label, exception.getMessage(), exception);
+        int chunkSize = 3000;
+        if (sql.length() <= chunkSize) {
+            CoreProtect.getInstance().getSLF4JLogger().error("[PlayPro metadata repair debug] {} SQL: {}", label, sql);
+            return;
+        }
+        int part = 1;
+        for (int offset = 0; offset < sql.length(); offset += chunkSize) {
+            int end = Math.min(sql.length(), offset + chunkSize);
+            CoreProtect.getInstance().getSLF4JLogger().error("[PlayPro metadata repair debug] {} SQL part {}: {}", label, part++, sql.substring(offset, end));
+        }
     }
 
     private static void ok(CommandSender sender, String message) {

@@ -494,6 +494,11 @@ public final class PlayProMigrationCommand {
                     CoreProtect.getInstance().getSLF4JLogger().info("PlayPro migration statement {} completed.", index);
                 }
             }
+            catch (Exception exception) {
+                CoreProtect.getInstance().getSLF4JLogger().error("[PlayPro migration debug] Statement {} failed: {}", index, exception.getMessage(), exception);
+                debugSql("failed migration statement " + index, statementSql);
+                throw exception;
+            }
         }
     }
 
@@ -568,27 +573,33 @@ public final class PlayProMigrationCommand {
         String block = qualified(database, prefix + "block");
         String entitySpawn = qualified(database, prefix + "entity_spawn");
         String lookupUnion = officialRawLookupUnionSql(database, prefix);
-        verifyOptionalType(connection,
-                "SELECT toTypeName(metadata) FROM (" + lookupUnion + ") LIMIT 1",
-                "Array(Int8)", "raw lookup metadata union");
-        verifyOfficialByteColumn(connection,
-                "SELECT metadata FROM (" + lookupUnion + ") LIMIT 1",
-                "metadata", "raw lookup metadata union");
-        verifyOptionalType(connection,
-                "SELECT toTypeName(blockdata) FROM " + block + " LIMIT 1",
-                "Array(Int8)", "block blockdata lookup");
-        verifyOfficialByteColumn(connection,
-                "SELECT meta,blockdata FROM " + block + " LIMIT 1",
-                "meta", "block meta lookup");
-        verifyOfficialByteColumn(connection,
-                "SELECT meta,blockdata FROM " + block + " LIMIT 1",
-                "blockdata", "block blockdata lookup");
-        verifyOptionalType(connection,
-                "SELECT toTypeName(data) FROM " + entitySpawn + " LIMIT 1",
-                "Array(Int8)", "entity spawn data lookup");
-        verifyOfficialByteColumn(connection,
-                "SELECT data FROM " + entitySpawn + " LIMIT 1",
-                "data", "entity spawn data lookup");
+        try {
+            verifyOptionalType(connection,
+                    "SELECT toTypeName(metadata) FROM (" + lookupUnion + ") LIMIT 1",
+                    "Array(Int8)", "raw lookup metadata union");
+            verifyOfficialByteColumn(connection,
+                    "SELECT metadata FROM (" + lookupUnion + ") LIMIT 1",
+                    "metadata", "raw lookup metadata union");
+            verifyOptionalType(connection,
+                    "SELECT toTypeName(blockdata) FROM " + block + " LIMIT 1",
+                    "Array(Int8)", "block blockdata lookup");
+            verifyOfficialByteColumn(connection,
+                    "SELECT meta,blockdata FROM " + block + " LIMIT 1",
+                    "meta", "block meta lookup");
+            verifyOfficialByteColumn(connection,
+                    "SELECT meta,blockdata FROM " + block + " LIMIT 1",
+                    "blockdata", "block blockdata lookup");
+            verifyOptionalType(connection,
+                    "SELECT toTypeName(data) FROM " + entitySpawn + " LIMIT 1",
+                    "Array(Int8)", "entity spawn data lookup");
+            verifyOfficialByteColumn(connection,
+                    "SELECT data FROM " + entitySpawn + " LIMIT 1",
+                    "data", "entity spawn data lookup");
+        }
+        catch (SQLException exception) {
+            dumpOfficialLookupDebug(connection, database, prefix, lookupUnion, exception);
+            throw exception;
+        }
     }
 
     private static void verifyOptionalType(Connection connection, String sql, String expectedType, String label) throws SQLException {
@@ -622,22 +633,107 @@ public final class PlayProMigrationCommand {
     }
 
     private static String officialRawLookupUnionSql(String database, String prefix) {
+        return officialRawLookupBranches(database, prefix).stream().map(LookupDebugBranch::query).collect(Collectors.joining(" UNION ALL "));
+    }
+
+    private static List<LookupDebugBranch> officialRawLookupBranches(String database, String prefix) {
         String block = qualified(database, prefix + "block");
         String container = qualified(database, prefix + "container");
         String entityContainer = qualified(database, prefix + "entity_container");
         String item = qualified(database, prefix + "item");
         String entityInteraction = qualified(database, prefix + "entity_interaction");
-        List<String> branches = List.of(
-                lookupBranch("'0' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,meta AS metadata,data,-1 AS amount,action,rolled_back,0 AS entity_spawn_rowid", block),
-                lookupBranch("'1' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,data,amount,action,rolled_back,0 AS entity_spawn_rowid", container),
-                lookupBranch("'3' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,data,amount,action,rolled_back,entity_spawn_rowid", entityContainer),
-                lookupBranch("'2' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,data AS metadata,0 AS data,amount,action,rolled_back,0 AS entity_spawn_rowid", item),
-                lookupBranch("'4' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,action AS data,-1 AS amount,4 AS action,rolled_back,entity_spawn_rowid", entityInteraction));
-        return String.join(" UNION ALL ", branches);
+        return List.of(
+                new LookupDebugBranch("block", lookupBranch("'0' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,meta AS metadata,data,-1 AS amount,action,rolled_back,0 AS entity_spawn_rowid", block)),
+                new LookupDebugBranch("container", lookupBranch("'1' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,data,amount,action,rolled_back,0 AS entity_spawn_rowid", container)),
+                new LookupDebugBranch("entity_container", lookupBranch("'3' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,data,amount,action,rolled_back,entity_spawn_rowid", entityContainer)),
+                new LookupDebugBranch("item", lookupBranch("'2' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,data AS metadata,0 AS data,amount,action,rolled_back,0 AS entity_spawn_rowid", item)),
+                new LookupDebugBranch("entity_interaction", lookupBranch("'4' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,action AS data,-1 AS amount,4 AS action,rolled_back,entity_spawn_rowid", entityInteraction)));
     }
 
     private static String lookupBranch(String projection, String table) {
         return "SELECT * FROM (SELECT " + projection + " FROM " + table + " LIMIT 1)";
+    }
+
+    private static void dumpOfficialLookupDebug(Connection connection, String database, String prefix, String lookupUnion, SQLException exception) {
+        CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration debug] Official lookup verification failed: {}", exception.getMessage(), exception);
+        debugSql("official raw lookup union", lookupUnion);
+        String tableList = List.of("block", "container", "entity_container", "item", "entity_interaction", "entity_spawn").stream()
+                .map(table -> sqlString(prefix + table))
+                .collect(Collectors.joining(","));
+        debugQuery(connection, "view binary columns",
+                "SELECT `table`,name,type FROM system.columns WHERE database=" + sqlString(database)
+                        + " AND `table` IN (" + tableList + ")"
+                        + " AND name IN ('meta','metadata','data','blockdata','action','type','amount','entity_spawn_rowid') ORDER BY `table`,position",
+                200);
+        debugQuery(connection, "event_data payload column formats",
+                "SELECT family,"
+                        + "multiIf(isNull(meta),'NULL',startsWith(hex(meta),'ACED'),'JAVA',startsWith(meta,'{'),'JSON_OBJECT',startsWith(meta,'['),'JSON_ARRAY',empty(meta),'EMPTY','OTHER') AS meta_format,"
+                        + "multiIf(isNull(metadata),'NULL',startsWith(hex(metadata),'ACED'),'JAVA',startsWith(metadata,'{'),'JSON_OBJECT',startsWith(metadata,'['),'JSON_ARRAY',empty(metadata),'EMPTY','OTHER') AS metadata_format,"
+                        + "multiIf(isNull(payload),'NULL',startsWith(hex(payload),'ACED'),'JAVA',startsWith(payload,'{'),'JSON_OBJECT',startsWith(payload,'['),'JSON_ARRAY',empty(payload),'EMPTY','OTHER') AS payload_format,"
+                        + "count() AS rows FROM " + qualified(database, prefix + "event_data")
+                        + " FINAL WHERE family IN ('block','container','entity_container','item','entity_interaction','entity','entity_spawn')"
+                        + " GROUP BY family,meta_format,metadata_format,payload_format ORDER BY family,rows DESC",
+                200);
+        for (LookupDebugBranch branch : officialRawLookupBranches(database, prefix)) {
+            debugSql("official raw lookup branch " + branch.label, branch.query);
+            debugQuery(connection, "official raw lookup branch types " + branch.label,
+                    "SELECT " + typeProjection("tbl", "id", "time", "user", "wid", "x", "y", "z", "type", "metadata", "data", "amount", "action", "rolled_back", "entity_spawn_rowid")
+                            + " FROM (" + branch.query + ") LIMIT 1",
+                    5);
+            debugQuery(connection, "official raw lookup branch samples " + branch.label,
+                    "SELECT tbl,id,type,toTypeName(metadata) AS metadata_type,toTypeName(data) AS data_type,toTypeName(action) AS action_type,left(toString(metadata),160) AS metadata_sample"
+                            + " FROM (" + branch.query + ") LIMIT 3",
+                    5);
+        }
+        debugQuery(connection, "official raw lookup union column types",
+                "SELECT " + typeProjection("tbl", "id", "time", "user", "wid", "x", "y", "z", "type", "metadata", "data", "amount", "action", "rolled_back", "entity_spawn_rowid")
+                        + " FROM (" + lookupUnion + ") LIMIT 1",
+                5);
+        debugQuery(connection, "official raw lookup union grouped metadata types",
+                "SELECT tbl,toTypeName(metadata) AS metadata_type,toTypeName(data) AS data_type,toTypeName(action) AS action_type,count() AS rows"
+                        + " FROM (" + lookupUnion + ") GROUP BY tbl,metadata_type,data_type,action_type ORDER BY tbl,metadata_type,data_type,action_type",
+                100);
+    }
+
+    private static String typeProjection(String... columns) {
+        return java.util.Arrays.stream(columns)
+                .map(column -> "toTypeName(" + quote(column) + ") AS " + quote(column + "_type"))
+                .collect(Collectors.joining(","));
+    }
+
+    private static void debugQuery(Connection connection, String label, String sql, int maxRows) {
+        debugSql(label, sql);
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+            int columns = resultSet.getMetaData().getColumnCount();
+            int row = 0;
+            while (resultSet.next() && row < maxRows) {
+                row++;
+                List<String> values = new ArrayList<>(columns);
+                for (int i = 1; i <= columns; i++) {
+                    values.add(resultSet.getMetaData().getColumnLabel(i) + "=" + String.valueOf(resultSet.getObject(i)));
+                }
+                CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration debug] {} row {}: {}", label, row, String.join(" | ", values));
+            }
+            if (row == 0) {
+                CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration debug] {} returned no rows.", label);
+            }
+        }
+        catch (SQLException debugException) {
+            CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration debug] {} failed: {}", label, debugException.getMessage(), debugException);
+        }
+    }
+
+    private static void debugSql(String label, String sql) {
+        int chunkSize = 3000;
+        if (sql.length() <= chunkSize) {
+            CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration debug] {} SQL: {}", label, sql);
+            return;
+        }
+        int part = 1;
+        for (int offset = 0; offset < sql.length(); offset += chunkSize) {
+            int end = Math.min(sql.length(), offset + chunkSize);
+            CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration debug] {} SQL part {}: {}", label, part++, sql.substring(offset, end));
+        }
     }
 
     private static void reportResultSet(CommandSender sender, ResultSet resultSet) throws SQLException {
@@ -931,6 +1027,10 @@ public final class PlayProMigrationCommand {
         return "`" + identifier + "`";
     }
 
+    private static String sqlString(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
+
     private static void ok(CommandSender sender, String message) {
         sender.sendMessage(Component.text(message, NamedTextColor.GREEN));
         CoreProtect.getInstance().getSLF4JLogger().info("[PlayPro migration] {}", message);
@@ -947,6 +1047,9 @@ public final class PlayProMigrationCommand {
     }
 
     private record ExpectedColumn(String tableSuffix, String name, String type) {
+    }
+
+    private record LookupDebugBranch(String label, String query) {
     }
 
     private record MigrationOptions(String database, String livePrefix, String archivePrefix, String sourceDatabase, String sourcePrefix, boolean rebuild) {
