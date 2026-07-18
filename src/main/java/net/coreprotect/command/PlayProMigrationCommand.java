@@ -112,8 +112,12 @@ public final class PlayProMigrationCommand {
             error(sender, "Archive prefix cannot be the same as the live prefix.");
             return;
         }
-        if (options.rebuild && options.sourcePrefix.equals(options.livePrefix)) {
+        if (options.rebuild && options.sourceDatabase.equals(options.database) && options.sourcePrefix.equals(options.livePrefix)) {
             error(sender, "Rebuild mode requires source-prefix to point at archived old tables, not the live prefix.");
+            return;
+        }
+        if (!options.rebuild && !options.sourceDatabase.equals(options.database)) {
+            error(sender, "source-database is only supported with rebuild:true.");
             return;
         }
 
@@ -127,7 +131,7 @@ public final class PlayProMigrationCommand {
         });
         migrationThread.start();
         if (options.rebuild) {
-            ok(sender, "Started PlayPro rebuild in " + options.database + " from archived source prefix " + options.sourcePrefix + ".");
+            ok(sender, "Started PlayPro rebuild in " + options.database + " from archived source " + options.sourceDatabase + "." + options.sourcePrefix + "*.");
         }
         else {
             ok(sender, "Started in-place PlayPro migration in " + options.database + ". Old tables will be archived as " + options.archivePrefix + "*.");
@@ -148,11 +152,11 @@ public final class PlayProMigrationCommand {
                 requireClickHouseVersion(connection);
                 requireTargetDatabaseEngine(connection, options);
                 if (options.rebuild) {
-                    requireSourceTables(connection, options, options.sourcePrefix);
+                    requireSourceTables(connection, options);
                     archiveExistingPlayProTarget(connection, options);
                 }
                 else {
-                    requireSourceTables(connection, options, options.livePrefix);
+                    requireSourceTables(connection, options);
                     requireArchiveTablesFree(connection, options);
                     archiveSourceTables(connection, options);
                 }
@@ -208,15 +212,18 @@ public final class PlayProMigrationCommand {
         }
     }
 
-    private static void requireSourceTables(Connection connection, MigrationOptions options, String sourcePrefix) throws SQLException {
+    private static void requireSourceTables(Connection connection, MigrationOptions options) throws SQLException {
         List<String> missing = new ArrayList<>();
+        String database = options.rebuild ? options.sourceDatabase : options.database;
+        String sourcePrefix = options.rebuild ? options.sourcePrefix : options.livePrefix;
         for (String table : ARCHIVE_TABLES) {
-            if (!tableExists(connection, options.database, sourcePrefix + table)) {
+            if (!tableExists(connection, database, sourcePrefix + table)) {
                 missing.add(sourcePrefix + table);
             }
         }
         if (!missing.isEmpty()) {
-            throw new SQLException("Source database is missing required tables: " + String.join(", ", missing));
+            throw new SQLException("Source database " + database + " is missing required tables: " + String.join(", ", missing)
+                    + similarTableHint(connection, database, sourcePrefix));
         }
     }
 
@@ -456,7 +463,7 @@ public final class PlayProMigrationCommand {
     private static void verifyMigratedRows(Connection connection, MigrationOptions options) throws SQLException {
         String events = qualified(options.database, options.livePrefix + "event_data");
         for (String family : MIGRATED_FAMILIES) {
-            String source = qualified(options.database, options.sourcePrefix + family);
+            String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
             long sourceRows = count(connection, source + (FINAL_SOURCE_FAMILIES.contains(family) ? " FINAL" : ""));
             long targetRows;
             try (PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events + " WHERE family=?")) {
@@ -551,7 +558,7 @@ public final class PlayProMigrationCommand {
             }
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 String sql = reader.lines().collect(Collectors.joining("\n"));
-                sql = sql.replace("kostya.co_", options.database + "." + options.sourcePrefix);
+                sql = sql.replace("kostya.co_", options.sourceDatabase + "." + options.sourcePrefix);
                 sql = sql.replace("coreprotect_playpro.co_", options.database + "." + options.livePrefix);
                 sql = sql.replace("CREATE DATABASE IF NOT EXISTS coreprotect_playpro ENGINE = Atomic;", "");
                 return sql;
@@ -791,6 +798,24 @@ public final class PlayProMigrationCommand {
         return quote(database) + "." + quote(table);
     }
 
+    private static String similarTableHint(Connection connection, String database, String sourcePrefix) throws SQLException {
+        List<String> tables = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT name FROM system.tables WHERE database=? AND (startsWith(name,?) OR startsWith(name,'co_')) ORDER BY name LIMIT 40")) {
+            statement.setString(1, database);
+            statement.setString(2, sourcePrefix);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    tables.add(resultSet.getString(1));
+                }
+            }
+        }
+        if (tables.isEmpty()) {
+            return "";
+        }
+        return ". Found tables in " + database + ": " + String.join(", ", tables);
+    }
+
     private static String quote(String identifier) {
         return "`" + identifier + "`";
     }
@@ -806,19 +831,21 @@ public final class PlayProMigrationCommand {
     }
 
     private static void usage(CommandSender sender) {
-        sender.sendMessage(Component.text("Usage: /co migrate-playpro [database:kostya] [prefix:co_] [archive-prefix:co_migrate_] [rebuild:true source-prefix:co_migrate_]", NamedTextColor.YELLOW));
+        sender.sendMessage(Component.text("Usage: /co migrate-playpro [database:coreprotect_art] [prefix:co_] [archive-prefix:co_migrate_] [rebuild:true source-database:kostya source-prefix:co_]", NamedTextColor.YELLOW));
     }
 
     private record ExpectedColumn(String tableSuffix, String name, String type) {
     }
 
-    private record MigrationOptions(String database, String livePrefix, String archivePrefix, String sourcePrefix, boolean rebuild) {
+    private record MigrationOptions(String database, String livePrefix, String archivePrefix, String sourceDatabase, String sourcePrefix, boolean rebuild) {
 
         private static MigrationOptions parse(String[] commandArgs) {
             String database = ConfigHandler.database;
             String livePrefix = ConfigHandler.prefix;
             String archivePrefix = livePrefix + "migrate_";
+            String sourceDatabase = null;
             String sourcePrefix = null;
+            boolean sourceDatabaseConfigured = false;
             boolean sourcePrefixConfigured = false;
             boolean rebuild = false;
 
@@ -835,6 +862,10 @@ public final class PlayProMigrationCommand {
                 String value = split[1];
                 switch (key) {
                     case "database" -> database = value;
+                    case "source-database" -> {
+                        sourceDatabase = value;
+                        sourceDatabaseConfigured = true;
+                    }
                     case "prefix" -> {
                         livePrefix = value;
                         archivePrefix = value + "migrate_";
@@ -849,14 +880,18 @@ public final class PlayProMigrationCommand {
                 }
             }
 
+            if (!sourceDatabaseConfigured) {
+                sourceDatabase = database;
+            }
             if (!sourcePrefixConfigured) {
                 sourcePrefix = archivePrefix;
             }
             validateIdentifier(database, "database");
+            validateIdentifier(sourceDatabase, "source database");
             validatePrefix(livePrefix, "prefix");
             validatePrefix(archivePrefix, "archive prefix");
             validatePrefix(sourcePrefix, "source prefix");
-            return new MigrationOptions(database, livePrefix, archivePrefix, sourcePrefix, rebuild);
+            return new MigrationOptions(database, livePrefix, archivePrefix, sourceDatabase, sourcePrefix, rebuild);
         }
 
         private static void validateIdentifier(String value, String name) {
