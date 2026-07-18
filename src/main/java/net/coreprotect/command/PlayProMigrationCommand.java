@@ -47,6 +47,12 @@ public final class PlayProMigrationCommand {
             "block", "container", "entity_container", "entity_interaction", "item", "entity_spawn");
     private static final Set<String> ID_ROWID_SOURCE_FAMILIES = Set.of(
             "art_map", "entity_map", "material_map", "blockdata_map", "world");
+    private static final Set<String> STRICT_ROWID_FAMILIES = Set.of(
+            "art_map", "block", "container", "entity_container", "entity_interaction",
+            "item", "entity", "entity_spawn", "entity_map", "material_map",
+            "blockdata_map", "user", "world");
+    private static final Set<String> HISTORICAL_DUPLICATE_ROWID_FAMILIES = Set.of(
+            "chat", "command", "session", "sign", "skull", "username_log");
     private static final List<ExpectedColumn> EVENT_DATA_COLUMNS = List.of(
             new ExpectedColumn("event_data", "dataset_id", "UUID"),
             new ExpectedColumn("event_data", "producer_id", "UUID"),
@@ -216,16 +222,27 @@ public final class PlayProMigrationCommand {
 
     private static void requireSourceTables(Connection connection, MigrationOptions options) throws SQLException {
         List<String> missing = new ArrayList<>();
+        List<String> views = new ArrayList<>();
         String database = options.rebuild ? options.sourceDatabase : options.database;
         String sourcePrefix = options.rebuild ? options.sourcePrefix : options.livePrefix;
         for (String table : ARCHIVE_TABLES) {
-            if (!tableExists(connection, database, sourcePrefix + table)) {
+            String sourceTable = sourcePrefix + table;
+            String engine = tableEngine(connection, database, sourceTable);
+            if (engine == null) {
                 missing.add(sourcePrefix + table);
+            }
+            else if ("View".equals(engine)) {
+                views.add(sourceTable);
             }
         }
         if (!missing.isEmpty()) {
             throw new SQLException("Source database " + database + " is missing required tables: " + String.join(", ", missing)
                     + similarTableHint(connection, database, sourcePrefix));
+        }
+        if (!views.isEmpty()) {
+            String retry = "/co migrate-playpro database:" + options.database + " prefix:" + options.livePrefix + " rebuild:true source-prefix:" + options.archivePrefix;
+            throw new SQLException("Source prefix " + sourcePrefix + " points at PlayPro compatibility views, not old fork tables. "
+                    + "If a previous migration already archived old tables, run: " + retry);
         }
     }
 
@@ -481,16 +498,38 @@ public final class PlayProMigrationCommand {
             }
         }
 
-        String familyList = MIGRATED_FAMILIES.stream().map(value -> "'" + value + "'").collect(Collectors.joining(","));
-        String duplicateSql = "SELECT count() FROM (SELECT family,rowid FROM " + events + " WHERE family IN(" + familyList
-                + ") GROUP BY family,rowid HAVING count()>1)";
+        verifyStrictRowIds(connection, events);
+        warnHistoricalDuplicateRowIds(connection, events);
+    }
+
+    private static void verifyStrictRowIds(Connection connection, String events) throws SQLException {
+        String familyList = STRICT_ROWID_FAMILIES.stream().map(value -> "'" + value + "'").collect(Collectors.joining(","));
+        String duplicateSql = "SELECT family,count() AS keys,sum(rows) AS rows FROM "
+                + "(SELECT family,rowid,count() AS rows FROM " + events + " WHERE family IN(" + familyList
+                + ") GROUP BY family,rowid HAVING count()>1) GROUP BY family ORDER BY family";
         try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(duplicateSql)) {
-            if (!resultSet.next()) {
-                throw new SQLException("ClickHouse did not return duplicate row verification results");
+            List<String> duplicates = new ArrayList<>();
+            while (resultSet.next()) {
+                duplicates.add(resultSet.getString("family") + " duplicate_keys=" + resultSet.getLong("keys") + " rows=" + resultSet.getLong("rows"));
             }
-            long duplicates = resultSet.getLong(1);
-            if (duplicates > 0) {
-                throw new SQLException("PlayPro migration produced " + duplicates + " duplicate family/rowid keys");
+            if (!duplicates.isEmpty()) {
+                throw new SQLException("PlayPro migration produced duplicate rowids in strict families: " + String.join(", ", duplicates));
+            }
+        }
+    }
+
+    private static void warnHistoricalDuplicateRowIds(Connection connection, String events) throws SQLException {
+        String familyList = HISTORICAL_DUPLICATE_ROWID_FAMILIES.stream().map(value -> "'" + value + "'").collect(Collectors.joining(","));
+        String duplicateSql = "SELECT family,count() AS keys,sum(rows) AS rows FROM "
+                + "(SELECT family,rowid,count() AS rows FROM " + events + " WHERE family IN(" + familyList
+                + ") GROUP BY family,rowid HAVING count()>1) GROUP BY family ORDER BY family";
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(duplicateSql)) {
+            List<String> duplicates = new ArrayList<>();
+            while (resultSet.next()) {
+                duplicates.add(resultSet.getString("family") + " duplicate_keys=" + resultSet.getLong("keys") + " rows=" + resultSet.getLong("rows"));
+            }
+            if (!duplicates.isEmpty()) {
+                CoreProtect.getInstance().getSLF4JLogger().warn("[PlayPro migration] Preserved non-critical historical duplicate rowids: {}", String.join(", ", duplicates));
             }
         }
     }

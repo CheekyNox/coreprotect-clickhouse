@@ -58,6 +58,10 @@ retry by rebuilding the PlayPro target from those archived source tables:
 co migrate-playpro database:<your current database> prefix:co_ rebuild:true source-prefix:co_migrate_
 ```
 
+Do not run the normal in-place command again after the old tables have already
+been archived. The command will refuse to use PlayPro compatibility views as
+source tables.
+
 After success, stop the server immediately. Replace this fork jar with the
 official PlayPro/CoreProtect jar and keep:
 
