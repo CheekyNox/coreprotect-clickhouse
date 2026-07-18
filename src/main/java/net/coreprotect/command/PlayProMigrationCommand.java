@@ -9,6 +9,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -176,7 +177,7 @@ public final class PlayProMigrationCommand {
                 verifyMigratedRows(connection, options);
                 ok(sender, "Verified migrated row counts for every PlayPro event family.");
                 PlayProMetadataRepairCommand.repair(connection, options.database, options.livePrefix, sender);
-                verifyOfficialLookupShapes(connection, options);
+                verifyOfficialLookupShapes(connection, options.database, options.livePrefix);
                 ok(sender, "Verified official PlayPro lookup column shapes.");
             }
 
@@ -563,28 +564,31 @@ public final class PlayProMigrationCommand {
         }
     }
 
-    private static void verifyOfficialLookupShapes(Connection connection, MigrationOptions options) throws SQLException {
-        String block = qualified(options.database, options.livePrefix + "block");
-        String container = qualified(options.database, options.livePrefix + "container");
-        String entityContainer = qualified(options.database, options.livePrefix + "entity_container");
-        String item = qualified(options.database, options.livePrefix + "item");
-        String entityInteraction = qualified(options.database, options.livePrefix + "entity_interaction");
-        String entitySpawn = qualified(options.database, options.livePrefix + "entity_spawn");
+    static void verifyOfficialLookupShapes(Connection connection, String database, String prefix) throws SQLException {
+        String block = qualified(database, prefix + "block");
+        String entitySpawn = qualified(database, prefix + "entity_spawn");
+        String lookupUnion = officialRawLookupUnionSql(database, prefix);
         verifyOptionalType(connection,
-                "SELECT toTypeName(metadata) FROM ("
-                        + "(SELECT meta AS metadata FROM " + block + " LIMIT 1)"
-                        + " UNION ALL (SELECT metadata FROM " + container + " LIMIT 1)"
-                        + " UNION ALL (SELECT metadata FROM " + entityContainer + " LIMIT 1)"
-                        + " UNION ALL (SELECT data AS metadata FROM " + item + " LIMIT 1)"
-                        + " UNION ALL (SELECT metadata FROM " + entityInteraction + " LIMIT 1)"
-                        + ") LIMIT 1",
-                "Array(Int8)", "lookup metadata union");
+                "SELECT toTypeName(metadata) FROM (" + lookupUnion + ") LIMIT 1",
+                "Array(Int8)", "raw lookup metadata union");
+        verifyOfficialByteColumn(connection,
+                "SELECT metadata FROM (" + lookupUnion + ") LIMIT 1",
+                "metadata", "raw lookup metadata union");
         verifyOptionalType(connection,
                 "SELECT toTypeName(blockdata) FROM " + block + " LIMIT 1",
                 "Array(Int8)", "block blockdata lookup");
+        verifyOfficialByteColumn(connection,
+                "SELECT meta,blockdata FROM " + block + " LIMIT 1",
+                "meta", "block meta lookup");
+        verifyOfficialByteColumn(connection,
+                "SELECT meta,blockdata FROM " + block + " LIMIT 1",
+                "blockdata", "block blockdata lookup");
         verifyOptionalType(connection,
                 "SELECT toTypeName(data) FROM " + entitySpawn + " LIMIT 1",
                 "Array(Int8)", "entity spawn data lookup");
+        verifyOfficialByteColumn(connection,
+                "SELECT data FROM " + entitySpawn + " LIMIT 1",
+                "data", "entity spawn data lookup");
     }
 
     private static void verifyOptionalType(Connection connection, String sql, String expectedType, String label) throws SQLException {
@@ -597,6 +601,43 @@ public final class PlayProMigrationCommand {
                 throw new SQLException("Official PlayPro " + label + " has incompatible type: expected " + expectedType + ", found " + actualType);
             }
         }
+    }
+
+    private static void verifyOfficialByteColumn(Connection connection, String sql, String column, String label) throws SQLException {
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+            if (!resultSet.next()) {
+                return;
+            }
+            int columnIndex = resultSet.findColumn(column);
+            int columnType = resultSet.getMetaData().getColumnType(columnIndex);
+            if (columnType != Types.ARRAY) {
+                throw new SQLException("Official PlayPro " + label + " is not readable as ClickHouse binary: expected JDBC ARRAY for "
+                        + column + ", found JDBC type " + columnType);
+            }
+            byte[] value = resultSet.getBytes(column);
+            if (value != null && value.length > 0 && value[0] != 0) {
+                throw new SQLException("Official PlayPro " + label + " has invalid ClickHouse binary presence marker");
+            }
+        }
+    }
+
+    private static String officialRawLookupUnionSql(String database, String prefix) {
+        String block = qualified(database, prefix + "block");
+        String container = qualified(database, prefix + "container");
+        String entityContainer = qualified(database, prefix + "entity_container");
+        String item = qualified(database, prefix + "item");
+        String entityInteraction = qualified(database, prefix + "entity_interaction");
+        List<String> branches = List.of(
+                lookupBranch("'0' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,meta AS metadata,data,-1 AS amount,action,rolled_back,0 AS entity_spawn_rowid", block),
+                lookupBranch("'1' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,data,amount,action,rolled_back,0 AS entity_spawn_rowid", container),
+                lookupBranch("'3' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,data,amount,action,rolled_back,entity_spawn_rowid", entityContainer),
+                lookupBranch("'2' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,data AS metadata,0 AS data,amount,action,rolled_back,0 AS entity_spawn_rowid", item),
+                lookupBranch("'4' AS tbl,rowid AS id,time,`user`,wid,x,y,z,type,metadata,action AS data,-1 AS amount,4 AS action,rolled_back,entity_spawn_rowid", entityInteraction));
+        return String.join(" UNION ALL ", branches);
+    }
+
+    private static String lookupBranch(String projection, String table) {
+        return "SELECT * FROM (SELECT " + projection + " FROM " + table + " LIMIT 1)";
     }
 
     private static void reportResultSet(CommandSender sender, ResultSet resultSet) throws SQLException {
@@ -852,7 +893,8 @@ public final class PlayProMigrationCommand {
     private static String binary(String value, String alias) {
         String presentValue = "ifNull(" + value + ",'')";
         String bytes = "arrayMap(i -> reinterpretAsInt8(substring(" + presentValue + ",i,1)),range(1,length(" + presentValue + ")+1))";
-        return "if(isNull(" + value + "),CAST([], 'Array(Int8)'),arrayConcat([toInt8(0)]," + bytes + ")) AS " + alias;
+        String expression = "if(isNull(" + value + "),CAST([], 'Array(Int8)'),arrayConcat([toInt8(0)]," + bytes + "))";
+        return "CAST(" + expression + ", 'Array(Int8)') AS " + alias;
     }
 
     private static String events(String events, String family) {

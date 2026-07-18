@@ -146,6 +146,8 @@ public final class PlayProMetadataRepairCommand {
             }
             PlayProMigrationCommand.recreateCompatibilityViews(connection, database, prefix);
             ok(sender, "Recreated official PlayPro compatibility views.");
+            PlayProMigrationCommand.verifyOfficialLookupShapes(connection, database, prefix);
+            ok(sender, "Verified official PlayPro lookup byte columns.");
 
             long remainingLegacyRows = countRemainingLegacyRows(connection, eventTable);
             if (remainingLegacyRows > 0) {
