@@ -19,6 +19,8 @@ When you run the command, the plugin:
 - waits for the consumer queue to drain;
 - pauses CoreProtect logging;
 - checks ClickHouse `25.6+`;
+- ensures the ClickHouse user has `prefer_column_name_to_alias=1`, which
+  official PlayPro lookup queries require for `co_item` metadata reads;
 - checks that the current database is UUID-backed/Atomic;
 - creates official PlayPro physical tables:
   - `co_storage_metadata`
@@ -103,9 +105,21 @@ need permission in the existing database for:
 - `RENAME TABLE`
 - `INSERT SELECT`
 - `SELECT`
+- `ALTER USER` for its own account, unless the host/admin has already set
+  `prefer_column_name_to_alias=1`
 
 If `RENAME TABLE` is not allowed, this in-place migration cannot keep the
 official `co_` prefix because official PlayPro needs view names like `co_block`.
+
+Official PlayPro currently has ClickHouse lookup SQL that selects
+`data AS metadata, 0 AS data` from `co_item`. ClickHouse aliases are global in a
+query, so with the default `prefer_column_name_to_alias=0`, `metadata` can be
+resolved as the numeric alias `0` instead of the real `co_item.data` byte array.
+If the migration cannot set the option automatically, ask the host/admin to run:
+
+```sql
+ALTER USER <coreprotect_clickhouse_user> SETTINGS prefer_column_name_to_alias = 1;
+```
 
 ## Why the old tables are archived
 

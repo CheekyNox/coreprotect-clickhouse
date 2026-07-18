@@ -159,6 +159,7 @@ public final class PlayProMigrationCommand {
                     throw new SQLException("Unable to open ClickHouse connection");
                 }
                 requireClickHouseVersion(connection);
+                requireOfficialPlayProAliasSetting(connection, sender);
                 requireTargetDatabaseEngine(connection, options);
                 if (options.rebuild) {
                     requireSourceTables(connection, options);
@@ -218,6 +219,48 @@ public final class PlayProMigrationCommand {
             if (major < 25 || (major == 25 && minor < 6)) {
                 throw new SQLException("Official PlayPro/CoreProtect requires ClickHouse 25.6+. Found " + version);
             }
+        }
+    }
+
+    static void requireOfficialPlayProAliasSetting(Connection connection, CommandSender sender) throws SQLException {
+        if (isPreferColumnNameToAliasEnabled(connection)) {
+            ok(sender, "Verified ClickHouse prefer_column_name_to_alias=1 for official PlayPro lookup compatibility.");
+            return;
+        }
+
+        String user = currentClickHouseUser(connection);
+        String alterSql = "ALTER USER " + quote(user) + " SETTINGS prefer_column_name_to_alias = 1";
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(alterSql);
+            statement.execute("SET prefer_column_name_to_alias = 1");
+        }
+        catch (SQLException exception) {
+            throw new SQLException("Official PlayPro/CoreProtect ClickHouse lookups require prefer_column_name_to_alias=1 for user "
+                    + user + ". Ask your ClickHouse host/admin to run: " + alterSql, exception);
+        }
+
+        if (!isPreferColumnNameToAliasEnabled(connection)) {
+            throw new SQLException("Unable to enable ClickHouse prefer_column_name_to_alias=1 for the current session. Ask your ClickHouse host/admin to run: " + alterSql);
+        }
+        ok(sender, "Enabled ClickHouse prefer_column_name_to_alias=1 for user " + user + ".");
+    }
+
+    private static boolean isPreferColumnNameToAliasEnabled(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(
+                "SELECT value FROM system.settings WHERE name='prefer_column_name_to_alias'")) {
+            if (!resultSet.next()) {
+                throw new SQLException("ClickHouse did not expose setting prefer_column_name_to_alias");
+            }
+            return "1".equals(resultSet.getString(1));
+        }
+    }
+
+    private static String currentClickHouseUser(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT currentUser()")) {
+            if (!resultSet.next()) {
+                throw new SQLException("ClickHouse did not return current user");
+            }
+            return resultSet.getString(1);
         }
     }
 
@@ -1024,7 +1067,7 @@ public final class PlayProMigrationCommand {
     }
 
     private static String quote(String identifier) {
-        return "`" + identifier + "`";
+        return "`" + identifier.replace("`", "``") + "`";
     }
 
     private static String sqlString(String value) {

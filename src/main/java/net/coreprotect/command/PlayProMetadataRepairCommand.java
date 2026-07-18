@@ -99,6 +99,7 @@ public final class PlayProMetadataRepairCommand {
                 if (connection == null) {
                     throw new SQLException("Unable to open ClickHouse connection");
                 }
+                PlayProMigrationCommand.requireOfficialPlayProAliasSetting(connection, sender);
                 repair(connection, options.database, options.prefix, sender);
             }
 
