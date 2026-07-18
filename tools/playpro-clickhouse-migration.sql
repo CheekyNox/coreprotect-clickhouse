@@ -564,7 +564,7 @@ FROM
     UNION ALL SELECT 'sign', count() FROM __SOURCE_TABLE_PREFIX__sign
     UNION ALL SELECT 'skull', count() FROM __SOURCE_TABLE_PREFIX__skull
     UNION ALL SELECT 'user', count() FROM __SOURCE_TABLE_PREFIX__user
-    UNION ALL SELECT 'username_log', count() FROM __SOURCE_TABLE_PREFIX__username_log
+    UNION ALL SELECT 'username_log', uniqExact(tuple(time, rowid)) FROM __SOURCE_TABLE_PREFIX__username_log
     UNION ALL SELECT 'world', uniqExact(id) FROM __SOURCE_TABLE_PREFIX__world
 ) AS source
 LEFT JOIN

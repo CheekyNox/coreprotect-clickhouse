@@ -47,6 +47,7 @@ public final class PlayProMigrationCommand {
             "block", "container", "entity_container", "entity_interaction", "item", "entity_spawn");
     private static final Set<String> ID_ROWID_SOURCE_FAMILIES = Set.of(
             "art_map", "entity_map", "material_map", "blockdata_map", "world");
+    private static final Set<String> COALESCED_TIME_ROWID_SOURCE_FAMILIES = Set.of("username_log");
     private static final Set<String> STRICT_ROWID_FAMILIES = Set.of(
             "art_map", "block", "container", "entity_container", "entity_interaction",
             "item", "entity", "entity_spawn", "entity_map", "material_map",
@@ -573,6 +574,7 @@ public final class PlayProMigrationCommand {
         String events = qualified(options.database, options.livePrefix + "event_data");
         for (String family : MIGRATED_FAMILIES) {
             long sourceRows = countSourceRows(connection, options, family);
+            warnCollapsedSourceRows(connection, options, family, sourceRows);
             long targetRows;
             try (PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events + " WHERE family=?")) {
                 statement.setString(1, family);
@@ -626,13 +628,34 @@ public final class PlayProMigrationCommand {
 
     private static long countSourceRows(Connection connection, MigrationOptions options, String family) throws SQLException {
         String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
-        String expression = ID_ROWID_SOURCE_FAMILIES.contains(family) ? "uniqExact(id)" : "count()";
+        String expression;
+        if (ID_ROWID_SOURCE_FAMILIES.contains(family)) {
+            expression = "uniqExact(id)";
+        }
+        else if (COALESCED_TIME_ROWID_SOURCE_FAMILIES.contains(family)) {
+            expression = "uniqExact(tuple(time,rowid))";
+        }
+        else {
+            expression = "count()";
+        }
         String finalModifier = FINAL_SOURCE_FAMILIES.contains(family) ? " FINAL" : "";
         try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT " + expression + " FROM " + source + finalModifier)) {
             if (!resultSet.next()) {
                 throw new SQLException("ClickHouse did not return a source count for family " + family);
             }
             return resultSet.getLong(1);
+        }
+    }
+
+    private static void warnCollapsedSourceRows(Connection connection, MigrationOptions options, String family, long logicalRows) throws SQLException {
+        if (!COALESCED_TIME_ROWID_SOURCE_FAMILIES.contains(family)) {
+            return;
+        }
+        long physicalRows = count(connection, qualified(options.sourceDatabase, options.sourcePrefix + family));
+        if (physicalRows > logicalRows) {
+            CoreProtect.getInstance().getSLF4JLogger().warn(
+                    "[PlayPro migration] Collapsed {} exact duplicate {} rows from the old source ({} physical -> {} logical).",
+                    physicalRows - logicalRows, family, physicalRows, logicalRows);
         }
     }
 
