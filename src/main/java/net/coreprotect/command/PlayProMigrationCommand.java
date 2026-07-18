@@ -651,7 +651,21 @@ public final class PlayProMigrationCommand {
         if (!COALESCED_TIME_ROWID_SOURCE_FAMILIES.contains(family)) {
             return;
         }
-        long physicalRows = count(connection, qualified(options.sourceDatabase, options.sourcePrefix + family));
+        String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
+        long physicalRows;
+        long distinctRows;
+        String sql = "SELECT count(),uniqExact(tuple(time,rowid,uuid,user)) FROM " + source;
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+            if (!resultSet.next()) {
+                throw new SQLException("ClickHouse did not return duplicate diagnostics for family " + family);
+            }
+            physicalRows = resultSet.getLong(1);
+            distinctRows = resultSet.getLong(2);
+        }
+        if (distinctRows != logicalRows) {
+            throw new SQLException("Old " + family + " contains conflicting rows with the same (time,rowid) key: "
+                    + distinctRows + " distinct rows for " + logicalRows + " logical keys");
+        }
         if (physicalRows > logicalRows) {
             CoreProtect.getInstance().getSLF4JLogger().warn(
                     "[PlayPro migration] Collapsed {} exact duplicate {} rows from the old source ({} physical -> {} logical).",
