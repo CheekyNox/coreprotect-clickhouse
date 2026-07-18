@@ -2,8 +2,8 @@
 -- official PlayPro/CoreProtect ClickHouse event_data schema.
 --
 -- This file is a template. The in-plugin /co migrate-playpro command rewrites:
---   source kostya.co_*              -> configured_database.archive_prefix*
---   target coreprotect_playpro.co_* -> configured_database.live_prefix*
+--   source __SOURCE_TABLE_PREFIX__* -> configured source database/prefix
+--   target __TARGET_TABLE_PREFIX__* -> configured target database/prefix
 --
 -- Do not run this file directly against production unless you have manually
 -- prepared a fresh official target schema and adjusted the database names.
@@ -11,18 +11,18 @@
 -- The plugin command archives the old physical co_* tables first because
 -- official PlayPro later creates compatibility views with those names.
 
-CREATE DATABASE IF NOT EXISTS coreprotect_playpro ENGINE = Atomic;
+CREATE DATABASE IF NOT EXISTS __TARGET_DATABASE__ ENGINE = Atomic;
 
 SELECT 'target identity rows' AS check_name, count()
-FROM coreprotect_playpro.co_storage_metadata;
+FROM __TARGET_TABLE_PREFIX__storage_metadata;
 
 SELECT 'target event rows before migration' AS check_name, family, count()
-FROM coreprotect_playpro.co_event_data
+FROM __TARGET_TABLE_PREFIX__event_data
 GROUP BY family
 ORDER BY family;
 
 -- art_map
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -42,11 +42,15 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_art_map
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM (
+    SELECT toUInt64(id) AS rowid, id, anyLast(art) AS art
+    FROM __SOURCE_TABLE_PREFIX__art_map
+    GROUP BY id
+) AS source
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- block
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -66,11 +70,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_block FINAL
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__block FINAL
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- chat
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -90,11 +94,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_chat
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__chat
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- command
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -114,11 +118,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_command
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__command
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- container
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -138,11 +142,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_container FINAL
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__container FINAL
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- entity_container
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -162,11 +166,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_entity_container FINAL
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__entity_container FINAL
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- entity_interaction
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -186,11 +190,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_entity_interaction FINAL
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__entity_interaction FINAL
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- item
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -210,11 +214,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_item FINAL
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__item FINAL
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- entity
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -234,11 +238,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_entity
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__entity
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- entity_spawn
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -260,11 +264,11 @@ SELECT
     origin_x, origin_y, origin_z, x, y, z, yaw, pitch,
     nullIf(data, ''), if(data = '', 0, 1), removed, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_entity_spawn FINAL
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__entity_spawn FINAL
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- entity_map
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -284,11 +288,15 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_entity_map
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM (
+    SELECT toUInt64(id) AS rowid, id, anyLast(entity) AS entity
+    FROM __SOURCE_TABLE_PREFIX__entity_map
+    GROUP BY id
+) AS source
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- material_map
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -308,11 +316,15 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_material_map
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM (
+    SELECT toUInt64(id) AS rowid, id, anyLast(material) AS material
+    FROM __SOURCE_TABLE_PREFIX__material_map
+    GROUP BY id
+) AS source
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- blockdata_map
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -332,11 +344,15 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_blockdata_map
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM (
+    SELECT toUInt64(id) AS rowid, id, anyLast(data) AS data
+    FROM __SOURCE_TABLE_PREFIX__blockdata_map
+    GROUP BY id
+) AS source
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- session
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -356,11 +372,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_session
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__session
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- sign
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -380,11 +396,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, color, color_secondary, data,
     waxed, face, line_1, line_2, line_3, line_4, line_5, line_6, line_7, line_8
-FROM kostya.co_sign
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__sign
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- skull
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -404,11 +420,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_skull
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__skull
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- user
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -428,11 +444,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_user
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__user
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- username_log
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -452,11 +468,11 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_username_log
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM __SOURCE_TABLE_PREFIX__username_log
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- world
-INSERT INTO coreprotect_playpro.co_event_data
+INSERT INTO __TARGET_TABLE_PREFIX__event_data
 (
     dataset_id, producer_id, producer_sequence, batch_id, batch_ordinal, family,
     rowid, time, user_id, wid, x, y, z, type, data, payload, meta, blockdata,
@@ -476,47 +492,51 @@ SELECT
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM kostya.co_world
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity;
+FROM (
+    SELECT toUInt64(id) AS rowid, id, anyLast(world) AS world
+    FROM __SOURCE_TABLE_PREFIX__world
+    GROUP BY id
+) AS source
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- Preserve allocator high-water marks. The official plugin also reads max(rowid)
 -- from event_data on startup, but these rows document the imported compatibility
 -- IDs and advance producer_sequence past the one-shot import sequences.
-INSERT INTO coreprotect_playpro.co_retention_high_water
+INSERT INTO __TARGET_TABLE_PREFIX__retention_high_water
     (dataset_id, producer_id, producer_sequence, family, rowid, recorded_at)
 SELECT identity.dataset_id, identity.producer_id, 1000, marks.family, marks.rowid, now64(3, 'UTC')
 FROM
 (
-    SELECT 'art_map' AS family, ifNull(max(rowid), 0) AS rowid FROM kostya.co_art_map
-    UNION ALL SELECT 'block', ifNull(max(rowid), 0) FROM kostya.co_block
-    UNION ALL SELECT 'chat', ifNull(max(rowid), 0) FROM kostya.co_chat
-    UNION ALL SELECT 'command', ifNull(max(rowid), 0) FROM kostya.co_command
-    UNION ALL SELECT 'container', ifNull(max(rowid), 0) FROM kostya.co_container
-    UNION ALL SELECT 'entity_container', ifNull(max(rowid), 0) FROM kostya.co_entity_container
-    UNION ALL SELECT 'entity_interaction', ifNull(max(rowid), 0) FROM kostya.co_entity_interaction
-    UNION ALL SELECT 'item', ifNull(max(rowid), 0) FROM kostya.co_item
-    UNION ALL SELECT 'entity', ifNull(max(rowid), 0) FROM kostya.co_entity
-    UNION ALL SELECT 'entity_spawn', ifNull(max(rowid), 0) FROM kostya.co_entity_spawn
-    UNION ALL SELECT 'entity_map', ifNull(max(rowid), 0) FROM kostya.co_entity_map
-    UNION ALL SELECT 'material_map', ifNull(max(rowid), 0) FROM kostya.co_material_map
-    UNION ALL SELECT 'blockdata_map', ifNull(max(rowid), 0) FROM kostya.co_blockdata_map
-    UNION ALL SELECT 'session', ifNull(max(rowid), 0) FROM kostya.co_session
-    UNION ALL SELECT 'sign', ifNull(max(rowid), 0) FROM kostya.co_sign
-    UNION ALL SELECT 'skull', ifNull(max(rowid), 0) FROM kostya.co_skull
-    UNION ALL SELECT 'user', ifNull(max(rowid), 0) FROM kostya.co_user
-    UNION ALL SELECT 'username_log', ifNull(max(rowid), 0) FROM kostya.co_username_log
-    UNION ALL SELECT 'world', ifNull(max(rowid), 0) FROM kostya.co_world
+    SELECT 'art_map' AS family, ifNull(max(id), 0) AS rowid FROM __SOURCE_TABLE_PREFIX__art_map
+    UNION ALL SELECT 'block', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__block
+    UNION ALL SELECT 'chat', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__chat
+    UNION ALL SELECT 'command', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__command
+    UNION ALL SELECT 'container', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__container
+    UNION ALL SELECT 'entity_container', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__entity_container
+    UNION ALL SELECT 'entity_interaction', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__entity_interaction
+    UNION ALL SELECT 'item', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__item
+    UNION ALL SELECT 'entity', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__entity
+    UNION ALL SELECT 'entity_spawn', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__entity_spawn
+    UNION ALL SELECT 'entity_map', ifNull(max(id), 0) FROM __SOURCE_TABLE_PREFIX__entity_map
+    UNION ALL SELECT 'material_map', ifNull(max(id), 0) FROM __SOURCE_TABLE_PREFIX__material_map
+    UNION ALL SELECT 'blockdata_map', ifNull(max(id), 0) FROM __SOURCE_TABLE_PREFIX__blockdata_map
+    UNION ALL SELECT 'session', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__session
+    UNION ALL SELECT 'sign', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__sign
+    UNION ALL SELECT 'skull', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__skull
+    UNION ALL SELECT 'user', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__user
+    UNION ALL SELECT 'username_log', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__username_log
+    UNION ALL SELECT 'world', ifNull(max(id), 0) FROM __SOURCE_TABLE_PREFIX__world
 ) AS marks
-CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM coreprotect_playpro.co_storage_metadata) AS identity
+CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity
 WHERE marks.rowid > 0;
 
 SELECT 'target event rows after migration' AS check_name, family, count()
-FROM coreprotect_playpro.co_event_data
+FROM __TARGET_TABLE_PREFIX__event_data
 GROUP BY family
 ORDER BY family;
 
 SELECT 'target high-water rows after migration' AS check_name, family, max(rowid)
-FROM coreprotect_playpro.co_retention_high_water
+FROM __TARGET_TABLE_PREFIX__retention_high_water
 GROUP BY family
 ORDER BY family;
 
@@ -527,30 +547,30 @@ SELECT
     if(source.rows = ifNull(target.rows, 0), 'OK', 'MISMATCH') AS status
 FROM
 (
-    SELECT 'art_map' AS family, count() AS rows FROM kostya.co_art_map
-    UNION ALL SELECT 'block', count() FROM kostya.co_block FINAL
-    UNION ALL SELECT 'chat', count() FROM kostya.co_chat
-    UNION ALL SELECT 'command', count() FROM kostya.co_command
-    UNION ALL SELECT 'container', count() FROM kostya.co_container FINAL
-    UNION ALL SELECT 'entity_container', count() FROM kostya.co_entity_container FINAL
-    UNION ALL SELECT 'entity_interaction', count() FROM kostya.co_entity_interaction FINAL
-    UNION ALL SELECT 'item', count() FROM kostya.co_item FINAL
-    UNION ALL SELECT 'entity', count() FROM kostya.co_entity
-    UNION ALL SELECT 'entity_spawn', count() FROM kostya.co_entity_spawn FINAL
-    UNION ALL SELECT 'entity_map', count() FROM kostya.co_entity_map
-    UNION ALL SELECT 'material_map', count() FROM kostya.co_material_map
-    UNION ALL SELECT 'blockdata_map', count() FROM kostya.co_blockdata_map
-    UNION ALL SELECT 'session', count() FROM kostya.co_session
-    UNION ALL SELECT 'sign', count() FROM kostya.co_sign
-    UNION ALL SELECT 'skull', count() FROM kostya.co_skull
-    UNION ALL SELECT 'user', count() FROM kostya.co_user
-    UNION ALL SELECT 'username_log', count() FROM kostya.co_username_log
-    UNION ALL SELECT 'world', count() FROM kostya.co_world
+    SELECT 'art_map' AS family, uniqExact(id) AS rows FROM __SOURCE_TABLE_PREFIX__art_map
+    UNION ALL SELECT 'block', count() FROM __SOURCE_TABLE_PREFIX__block FINAL
+    UNION ALL SELECT 'chat', count() FROM __SOURCE_TABLE_PREFIX__chat
+    UNION ALL SELECT 'command', count() FROM __SOURCE_TABLE_PREFIX__command
+    UNION ALL SELECT 'container', count() FROM __SOURCE_TABLE_PREFIX__container FINAL
+    UNION ALL SELECT 'entity_container', count() FROM __SOURCE_TABLE_PREFIX__entity_container FINAL
+    UNION ALL SELECT 'entity_interaction', count() FROM __SOURCE_TABLE_PREFIX__entity_interaction FINAL
+    UNION ALL SELECT 'item', count() FROM __SOURCE_TABLE_PREFIX__item FINAL
+    UNION ALL SELECT 'entity', count() FROM __SOURCE_TABLE_PREFIX__entity
+    UNION ALL SELECT 'entity_spawn', count() FROM __SOURCE_TABLE_PREFIX__entity_spawn FINAL
+    UNION ALL SELECT 'entity_map', uniqExact(id) FROM __SOURCE_TABLE_PREFIX__entity_map
+    UNION ALL SELECT 'material_map', uniqExact(id) FROM __SOURCE_TABLE_PREFIX__material_map
+    UNION ALL SELECT 'blockdata_map', uniqExact(id) FROM __SOURCE_TABLE_PREFIX__blockdata_map
+    UNION ALL SELECT 'session', count() FROM __SOURCE_TABLE_PREFIX__session
+    UNION ALL SELECT 'sign', count() FROM __SOURCE_TABLE_PREFIX__sign
+    UNION ALL SELECT 'skull', count() FROM __SOURCE_TABLE_PREFIX__skull
+    UNION ALL SELECT 'user', count() FROM __SOURCE_TABLE_PREFIX__user
+    UNION ALL SELECT 'username_log', count() FROM __SOURCE_TABLE_PREFIX__username_log
+    UNION ALL SELECT 'world', uniqExact(id) FROM __SOURCE_TABLE_PREFIX__world
 ) AS source
 LEFT JOIN
 (
     SELECT family, count() AS rows
-    FROM coreprotect_playpro.co_event_data
+    FROM __TARGET_TABLE_PREFIX__event_data
     GROUP BY family
 ) AS target ON target.family = source.family
 ORDER BY source.family;

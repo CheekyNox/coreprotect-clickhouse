@@ -10,7 +10,7 @@ The in-plugin migration keeps the same ClickHouse database and table prefix:
 
 ```yaml
 database-type: clickhouse
-clickhouse-database: kostya
+clickhouse-database: <your current database>
 table-prefix: co_
 ```
 
@@ -47,7 +47,15 @@ co migrate-playpro
 For a non-default database or prefix:
 
 ```text
-co migrate-playpro database:kostya prefix:co_ archive-prefix:co_migrate_
+co migrate-playpro database:<your current database> prefix:co_ archive-prefix:co_migrate_
+```
+
+If an earlier migration attempt already renamed the old fork tables to
+`co_migrate_*` but failed before completion, keep the server in maintenance and
+retry by rebuilding the PlayPro target from those archived source tables:
+
+```text
+co migrate-playpro database:<your current database> prefix:co_ rebuild:true source-prefix:co_migrate_
 ```
 
 After success, stop the server immediately. Replace this fork jar with the
@@ -55,7 +63,7 @@ official PlayPro/CoreProtect jar and keep:
 
 ```yaml
 database-type: clickhouse
-clickhouse-database: kostya
+clickhouse-database: <your current database>
 table-prefix: co_
 ```
 

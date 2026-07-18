@@ -45,6 +45,8 @@ public final class PlayProMigrationCommand {
             "username_log", "world");
     private static final Set<String> FINAL_SOURCE_FAMILIES = Set.of(
             "block", "container", "entity_container", "entity_interaction", "item", "entity_spawn");
+    private static final Set<String> ID_ROWID_SOURCE_FAMILIES = Set.of(
+            "art_map", "entity_map", "material_map", "blockdata_map", "world");
     private static final List<ExpectedColumn> EVENT_DATA_COLUMNS = List.of(
             new ExpectedColumn("event_data", "dataset_id", "UUID"),
             new ExpectedColumn("event_data", "producer_id", "UUID"),
@@ -463,8 +465,7 @@ public final class PlayProMigrationCommand {
     private static void verifyMigratedRows(Connection connection, MigrationOptions options) throws SQLException {
         String events = qualified(options.database, options.livePrefix + "event_data");
         for (String family : MIGRATED_FAMILIES) {
-            String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
-            long sourceRows = count(connection, source + (FINAL_SOURCE_FAMILIES.contains(family) ? " FINAL" : ""));
+            long sourceRows = countSourceRows(connection, options, family);
             long targetRows;
             try (PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events + " WHERE family=?")) {
                 statement.setString(1, family);
@@ -491,6 +492,18 @@ public final class PlayProMigrationCommand {
             if (duplicates > 0) {
                 throw new SQLException("PlayPro migration produced " + duplicates + " duplicate family/rowid keys");
             }
+        }
+    }
+
+    private static long countSourceRows(Connection connection, MigrationOptions options, String family) throws SQLException {
+        String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
+        String expression = ID_ROWID_SOURCE_FAMILIES.contains(family) ? "uniqExact(id)" : "count()";
+        String finalModifier = FINAL_SOURCE_FAMILIES.contains(family) ? " FINAL" : "";
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT " + expression + " FROM " + source + finalModifier)) {
+            if (!resultSet.next()) {
+                throw new SQLException("ClickHouse did not return a source count for family " + family);
+            }
+            return resultSet.getLong(1);
         }
     }
 
@@ -558,9 +571,9 @@ public final class PlayProMigrationCommand {
             }
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 String sql = reader.lines().collect(Collectors.joining("\n"));
-                sql = sql.replace("kostya.co_", options.sourceDatabase + "." + options.sourcePrefix);
-                sql = sql.replace("coreprotect_playpro.co_", options.database + "." + options.livePrefix);
-                sql = sql.replace("CREATE DATABASE IF NOT EXISTS coreprotect_playpro ENGINE = Atomic;", "");
+                sql = sql.replace("__SOURCE_TABLE_PREFIX__", options.sourceDatabase + "." + options.sourcePrefix);
+                sql = sql.replace("__TARGET_TABLE_PREFIX__", options.database + "." + options.livePrefix);
+                sql = sql.replace("CREATE DATABASE IF NOT EXISTS __TARGET_DATABASE__ ENGINE = Atomic;", "");
                 return sql;
             }
         }
@@ -831,7 +844,8 @@ public final class PlayProMigrationCommand {
     }
 
     private static void usage(CommandSender sender) {
-        sender.sendMessage(Component.text("Usage: /co migrate-playpro [database:coreprotect_art] [prefix:co_] [archive-prefix:co_migrate_] [rebuild:true source-database:kostya source-prefix:co_]", NamedTextColor.YELLOW));
+        sender.sendMessage(Component.text("Usage: /co migrate-playpro [database:<current_database>] [prefix:co_] [archive-prefix:co_migrate_]", NamedTextColor.YELLOW));
+        sender.sendMessage(Component.text("Failed/partial retry: /co migrate-playpro database:<current_database> prefix:co_ rebuild:true source-prefix:co_migrate_", NamedTextColor.YELLOW));
     }
 
     private record ExpectedColumn(String tableSuffix, String name, String type) {
