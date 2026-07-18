@@ -235,8 +235,8 @@ public final class PlayProMetadataRepairCommand {
         while (true) {
             List<FixRow> rows = new ArrayList<>();
             String sql = "SELECT e.rowid,toString(e.producer_id),e.producer_sequence,toString(e.batch_id),e.batch_ordinal,e.type,e.amount,e." + quote(column) + ",m.material_name "
-                    + "FROM " + eventTable + " FINAL AS e "
-                    + "LEFT JOIN (SELECT id,any(name) AS material_name FROM " + eventTable + " FINAL WHERE family='material_map' GROUP BY id) AS m ON m.id=ifNull(e.type,0) "
+                    + "FROM (SELECT * FROM " + eventTable + " FINAL) AS e "
+                    + "LEFT JOIN (SELECT id,any(name) AS material_name FROM (SELECT * FROM " + eventTable + " FINAL WHERE family='material_map') GROUP BY id) AS m ON m.id=ifNull(e.type,0) "
                     + "WHERE e.family=? AND tuple(e.rowid,toString(e.producer_id),e.producer_sequence,toString(e.batch_id),e.batch_ordinal)>tuple(toUInt64(?),toString(?),toUInt64(?),toString(?),toUInt32(?)) "
                     + "AND e." + quote(column) + " IS NOT NULL AND startsWith(e." + quote(column) + ", '{') "
                     + "ORDER BY e.rowid,toString(e.producer_id),e.producer_sequence,toString(e.batch_id),e.batch_ordinal LIMIT " + BATCH_SIZE;
