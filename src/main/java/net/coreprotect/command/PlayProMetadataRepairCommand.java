@@ -19,6 +19,7 @@ import org.bukkit.Material;
 import org.bukkit.util.io.BukkitObjectOutputStream;
 import org.bukkit.command.CommandSender;
 
+import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 
 import net.coreprotect.CoreProtect;
@@ -137,6 +138,7 @@ public final class PlayProMetadataRepairCommand {
             repaired += repairJsonBlockMetaRows(connection, sender, eventTable, fixTable);
             repaired += repairJsonItemRows(connection, sender, eventTable, fixTable, "container", "metadata");
             repaired += repairJsonItemRows(connection, sender, eventTable, fixTable, "item", "payload");
+            repaired += repairLegacyMetadataRows(connection, sender, eventTable, fixTable, "container", "metadata");
             repaired += repairLegacyMetadataRows(connection, sender, eventTable, fixTable, "entity_container", "metadata");
             repaired += repairBase64Rows(connection, sender, eventTable, fixTable, "entity_interaction", "metadata");
             repaired += repairLegacyEntityDataRows(connection, sender, eventTable, fixTable, "entity", "payload");
@@ -232,9 +234,12 @@ public final class PlayProMetadataRepairCommand {
         EventKey cursor = EventKey.START;
         while (true) {
             List<FixRow> rows = new ArrayList<>();
-            String sql = "SELECT " + EVENT_KEY_COLUMNS + ",type,amount," + quote(column) + " FROM " + eventTable + " FINAL "
-                    + "WHERE family=? AND " + EVENT_KEY_CURSOR + " AND " + quote(column) + " IS NOT NULL AND startsWith(" + quote(column) + ", '{') "
-                    + "ORDER BY " + EVENT_KEY_ORDER + " LIMIT " + BATCH_SIZE;
+            String sql = "SELECT e.rowid,toString(e.producer_id),e.producer_sequence,toString(e.batch_id),e.batch_ordinal,e.type,e.amount,e." + quote(column) + ",m.material_name "
+                    + "FROM " + eventTable + " FINAL AS e "
+                    + "LEFT JOIN (SELECT id,any(name) AS material_name FROM " + eventTable + " FINAL WHERE family='material_map' GROUP BY id) AS m ON m.id=ifNull(e.type,0) "
+                    + "WHERE e.family=? AND tuple(e.rowid,toString(e.producer_id),e.producer_sequence,toString(e.batch_id),e.batch_ordinal)>tuple(toUInt64(?),toString(?),toUInt64(?),toString(?),toUInt32(?)) "
+                    + "AND e." + quote(column) + " IS NOT NULL AND startsWith(e." + quote(column) + ", '{') "
+                    + "ORDER BY e.rowid,toString(e.producer_id),e.producer_sequence,toString(e.batch_id),e.batch_ordinal LIMIT " + BATCH_SIZE;
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setString(1, family);
                 bindCursor(statement, 2, cursor);
@@ -243,7 +248,7 @@ public final class PlayProMetadataRepairCommand {
                         EventKey key = readEventKey(resultSet);
                         cursor = key;
                         try {
-                            byte[] converted = convertSerializedItem(resultSet.getString(8), resultSet.getInt(6), resultSet.getInt(7));
+                            byte[] converted = convertSerializedItem(resultSet.getString(8), resultSet.getInt(6), resultSet.getInt(7), resultSet.getString(9));
                             rows.add(FixRow.forColumn(key, family, column, converted));
                         }
                         catch (Exception exception) {
@@ -368,10 +373,17 @@ public final class PlayProMetadataRepairCommand {
         }
     }
 
-    private static byte[] convertSerializedItem(String itemData, int typeId, int amount) {
+    private static byte[] convertSerializedItem(String itemData, int typeId, int amount, String materialName) {
         Material type = MaterialUtils.getType(typeId);
+        if (type == null && materialName != null && !materialName.isEmpty()) {
+            type = MaterialUtils.getType(materialName);
+        }
         SerializedItem item = ItemUtils.deserializeItem(itemData, type, amount);
         if (item == null || item.itemStack() == null) {
+            byte[] metadataOnly = convertMetadataOnlySerializedItem(itemData);
+            if (metadataOnly != UNCONVERTIBLE_ITEM_METADATA) {
+                return metadataOnly;
+            }
             throw new IllegalArgumentException("Unable to deserialize item JSON for material id " + typeId);
         }
 
@@ -381,6 +393,40 @@ public final class PlayProMetadataRepairCommand {
             return null;
         }
         return ItemUtils.convertByteData(metadata);
+    }
+
+    private static final byte[] UNCONVERTIBLE_ITEM_METADATA = new byte[0];
+
+    private static byte[] convertMetadataOnlySerializedItem(String itemData) {
+        try {
+            JsonObject object = JsonSerialization.DEFAULT_GSON.fromJson(itemData, JsonObject.class);
+            if (object == null) {
+                return null;
+            }
+            String faceData = null;
+            if (object.has("co_slot")) {
+                object.remove("co_slot");
+            }
+            if (object.has("co_facing")) {
+                faceData = object.remove("co_facing").getAsString();
+            }
+            if (object.size() > 0) {
+                return UNCONVERTIBLE_ITEM_METADATA;
+            }
+            if (faceData == null || faceData.isEmpty()) {
+                return null;
+            }
+            List<List<Map<String, Object>>> metadata = new ArrayList<>();
+            List<Map<String, Object>> list = new ArrayList<>();
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("facing", faceData);
+            list.add(meta);
+            metadata.add(list);
+            return ItemUtils.convertByteData(metadata);
+        }
+        catch (Exception exception) {
+            return UNCONVERTIBLE_ITEM_METADATA;
+        }
     }
 
     static byte[] convertBlockMeta(String metadata) {
@@ -705,7 +751,7 @@ public final class PlayProMetadataRepairCommand {
     private static long countRemainingLegacyRows(Connection connection, String eventTable) throws SQLException {
         String sql = "SELECT count() FROM " + eventTable + " FINAL WHERE "
                 + "(family='block' AND meta IS NOT NULL AND startsWith(meta,'{')) OR "
-                + "(family='container' AND metadata IS NOT NULL AND startsWith(metadata,'{')) OR "
+                + "(family='container' AND metadata IS NOT NULL AND (startsWith(metadata,'{') OR startsWith(metadata,'['))) OR "
                 + "(family='item' AND payload IS NOT NULL AND startsWith(payload,'{')) OR "
                 + "(family='entity_container' AND metadata IS NOT NULL AND startsWith(metadata,'[')) OR "
                 + "(family='entity_interaction' AND metadata IS NOT NULL AND metadata!='' AND match(metadata,'^[A-Za-z0-9+/]+={0,2}$')) OR "
