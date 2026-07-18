@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
@@ -161,20 +162,28 @@ public final class PlayProMigrationCommand {
                 requireClickHouseVersion(connection);
                 requireOfficialPlayProAliasSetting(connection, sender);
                 requireTargetDatabaseEngine(connection, options);
-                if (options.rebuild) {
-                    requireSourceTables(connection, options);
-                    archiveExistingPlayProTarget(connection, options);
+                boolean resume = isResumableInPlaceMigration(connection, options);
+                if (resume) {
+                    ok(sender, "Detected a completed data copy from an interrupted migration. Resuming final verification only.");
+                    validateEventDataSchema(connection, options.database, options.livePrefix);
+                    validateCompatibilityViews(connection, options.database, options.livePrefix);
                 }
                 else {
-                    requireSourceTables(connection, options);
-                    requireArchiveTablesFree(connection, options);
-                    archiveSourceTables(connection, options);
+                    if (options.rebuild) {
+                        requireSourceTables(connection, options);
+                        archiveExistingPlayProTarget(connection, options);
+                    }
+                    else {
+                        requireSourceTables(connection, options);
+                        requireArchiveTablesFree(connection, options);
+                        archiveSourceTables(connection, options);
+                    }
+                    bootstrapTargetSchema(connection, options);
+                    requireTargetReady(connection, options);
+                    recreateCompatibilityViews(connection, options.database, options.livePrefix);
+                    ok(sender, "Created official PlayPro compatibility views.");
+                    runMigrationSql(connection, options, sender);
                 }
-                bootstrapTargetSchema(connection, options);
-                requireTargetReady(connection, options);
-                recreateCompatibilityViews(connection, options.database, options.livePrefix);
-                ok(sender, "Created official PlayPro compatibility views.");
-                runMigrationSql(connection, options, sender);
                 verifyMigratedRows(connection, options);
                 ok(sender, "Verified migrated row counts for every PlayPro event family.");
                 PlayProMetadataRepairCommand.repair(connection, options.database, options.livePrefix, sender);
@@ -313,6 +322,23 @@ public final class PlayProMigrationCommand {
         for (String table : ARCHIVE_TABLES) {
             String engine = tableEngine(connection, database, prefix + table);
             if (engine == null || "View".equals(engine)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isResumableInPlaceMigration(Connection connection, MigrationOptions options) throws SQLException {
+        if (options.rebuild || !options.database.equals(options.sourceDatabase)
+                || !options.archivePrefix.equals(options.sourcePrefix)) {
+            return false;
+        }
+        if (!"CoalescingMergeTree".equals(tableEngine(connection, options.database, options.livePrefix + "event_data"))
+                || !hasPhysicalSourceTables(connection, options.database, options.archivePrefix)) {
+            return false;
+        }
+        for (String table : ARCHIVE_TABLES) {
+            if (!"View".equals(tableEngine(connection, options.database, options.livePrefix + table))) {
                 return false;
             }
         }
@@ -662,17 +688,29 @@ public final class PlayProMigrationCommand {
             if (!resultSet.next()) {
                 return;
             }
-            int columnIndex = resultSet.findColumn(column);
+            int columnIndex = jdbcColumnIndex(resultSet.getMetaData(), column);
             int columnType = resultSet.getMetaData().getColumnType(columnIndex);
             if (columnType != Types.ARRAY) {
                 throw new SQLException("Official PlayPro " + label + " is not readable as ClickHouse binary: expected JDBC ARRAY for "
                         + column + ", found JDBC type " + columnType);
             }
-            byte[] value = resultSet.getBytes(column);
+            byte[] value = resultSet.getBytes(columnIndex);
             if (value != null && value.length > 0 && value[0] != 0) {
                 throw new SQLException("Official PlayPro " + label + " has invalid ClickHouse binary presence marker");
             }
         }
+    }
+
+    static int jdbcColumnIndex(ResultSetMetaData metadata, String column) throws SQLException {
+        int columnCount = metadata.getColumnCount();
+        for (int index = 1; index <= columnCount; index++) {
+            String label = metadata.getColumnLabel(index);
+            String name = metadata.getColumnName(index);
+            if (column.equalsIgnoreCase(label) || column.equalsIgnoreCase(name)) {
+                return index;
+            }
+        }
+        throw new SQLException("Result has no column named " + column);
     }
 
     private static String officialRawLookupUnionSql(String database, String prefix) {
