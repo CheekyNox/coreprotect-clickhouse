@@ -47,7 +47,6 @@ public final class PlayProMigrationCommand {
             "block", "container", "entity_container", "entity_interaction", "item", "entity_spawn");
     private static final Set<String> ID_ROWID_SOURCE_FAMILIES = Set.of(
             "art_map", "entity_map", "material_map", "blockdata_map", "world");
-    private static final Set<String> COALESCED_TIME_ROWID_SOURCE_FAMILIES = Set.of("username_log");
     private static final Set<String> STRICT_ROWID_FAMILIES = Set.of(
             "art_map", "block", "container", "entity_container", "entity_interaction",
             "item", "entity", "entity_spawn", "entity_map", "material_map",
@@ -183,6 +182,7 @@ public final class PlayProMigrationCommand {
                     ok(sender, "Created official PlayPro compatibility views.");
                     runMigrationSql(connection, options, sender);
                 }
+                reconcileUsernameLogRows(connection, options, sender);
                 verifyMigratedRows(connection, options);
                 ok(sender, "Verified migrated row counts for every PlayPro event family.");
                 PlayProMetadataRepairCommand.repair(connection, options.database, options.livePrefix, sender);
@@ -574,7 +574,6 @@ public final class PlayProMigrationCommand {
         String events = qualified(options.database, options.livePrefix + "event_data");
         for (String family : MIGRATED_FAMILIES) {
             long sourceRows = countSourceRows(connection, options, family);
-            warnCollapsedSourceRows(connection, options, family, sourceRows);
             long targetRows;
             try (PreparedStatement statement = connection.prepareStatement("SELECT count() FROM " + events + " WHERE family=?")) {
                 statement.setString(1, family);
@@ -628,16 +627,7 @@ public final class PlayProMigrationCommand {
 
     private static long countSourceRows(Connection connection, MigrationOptions options, String family) throws SQLException {
         String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
-        String expression;
-        if (ID_ROWID_SOURCE_FAMILIES.contains(family)) {
-            expression = "uniqExact(id)";
-        }
-        else if (COALESCED_TIME_ROWID_SOURCE_FAMILIES.contains(family)) {
-            expression = "uniqExact(tuple(time,rowid))";
-        }
-        else {
-            expression = "count()";
-        }
+        String expression = ID_ROWID_SOURCE_FAMILIES.contains(family) ? "uniqExact(id)" : "count()";
         String finalModifier = FINAL_SOURCE_FAMILIES.contains(family) ? " FINAL" : "";
         try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery("SELECT " + expression + " FROM " + source + finalModifier)) {
             if (!resultSet.next()) {
@@ -647,30 +637,90 @@ public final class PlayProMigrationCommand {
         }
     }
 
-    private static void warnCollapsedSourceRows(Connection connection, MigrationOptions options, String family, long logicalRows) throws SQLException {
-        if (!COALESCED_TIME_ROWID_SOURCE_FAMILIES.contains(family)) {
-            return;
-        }
-        String source = qualified(options.sourceDatabase, options.sourcePrefix + family);
+    private static void reconcileUsernameLogRows(Connection connection, MigrationOptions options, CommandSender sender) throws SQLException {
+        String source = qualified(options.sourceDatabase, options.sourcePrefix + "username_log");
+        String events = qualified(options.database, options.livePrefix + "event_data");
+        String highWater = qualified(options.database, options.livePrefix + "retention_high_water");
         long physicalRows;
-        long distinctRows;
-        String sql = "SELECT count(),uniqExact(tuple(time,rowid,uuid,user)) FROM " + source;
-        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sql)) {
+        long logicalKeys;
+        String sourceDiagnostics = "SELECT count(),uniqExact(tuple(time,rowid)) FROM " + source;
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(sourceDiagnostics)) {
             if (!resultSet.next()) {
-                throw new SQLException("ClickHouse did not return duplicate diagnostics for family " + family);
+                throw new SQLException("ClickHouse did not return username_log duplicate diagnostics");
             }
             physicalRows = resultSet.getLong(1);
-            distinctRows = resultSet.getLong(2);
+            logicalKeys = resultSet.getLong(2);
         }
-        if (distinctRows != logicalRows) {
-            throw new SQLException("Old " + family + " contains conflicting rows with the same (time,rowid) key: "
-                    + distinctRows + " distinct rows for " + logicalRows + " logical keys");
+        if (physicalRows == logicalKeys) {
+            return;
         }
-        if (physicalRows > logicalRows) {
-            CoreProtect.getInstance().getSLF4JLogger().warn(
-                    "[PlayPro migration] Collapsed {} exact duplicate {} rows from the old source ({} physical -> {} logical).",
-                    physicalRows - logicalRows, family, physicalRows, logicalRows);
+
+        long targetRows;
+        long targetKeys;
+        long nonMigrationRows;
+        String targetDiagnostics = "SELECT count(),uniqExact(tuple(time,rowid)),countIf(producer_sequence!=180) FROM "
+                + events + " WHERE family='username_log'";
+        try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(targetDiagnostics)) {
+            if (!resultSet.next()) {
+                throw new SQLException("ClickHouse did not return migrated username_log diagnostics");
+            }
+            targetRows = resultSet.getLong(1);
+            targetKeys = resultSet.getLong(2);
+            nonMigrationRows = resultSet.getLong(3);
         }
+        if (targetRows != physicalRows || targetKeys != physicalRows) {
+            if (nonMigrationRows > 0) {
+                throw new SQLException("Unexpected migrated username_log state: source=" + physicalRows
+                        + ", source_keys=" + logicalKeys + ", target=" + targetRows + ", target_keys=" + targetKeys
+                        + ", non_migration_rows=" + nonMigrationRows);
+            }
+            ok(sender, "Remapping " + (physicalRows - logicalKeys) + " conflicting username history rows to unique PlayPro rowids.");
+            try (Statement statement = connection.createStatement()) {
+                if (targetRows > 0) {
+                    statement.execute("ALTER TABLE " + events + " DELETE WHERE family='username_log' SETTINGS mutations_sync=2");
+                }
+                statement.execute(usernameLogInsertSql(options));
+            }
+
+            try (Statement statement = connection.createStatement(); ResultSet resultSet = statement.executeQuery(targetDiagnostics)) {
+                if (!resultSet.next() || resultSet.getLong(1) != physicalRows || resultSet.getLong(2) != physicalRows
+                        || resultSet.getLong(3) != 0) {
+                    throw new SQLException("Unable to preserve every username_log row with a unique PlayPro rowid");
+                }
+            }
+        }
+
+        String highWaterSql = "INSERT INTO " + highWater
+                + " (dataset_id,producer_id,producer_sequence,family,rowid,recorded_at) "
+                + "SELECT identity.dataset_id,identity.producer_id,1001,'username_log',marks.rowid,now64(3,'UTC') "
+                + "FROM (SELECT max(rowid) AS rowid FROM " + events + " WHERE family='username_log') AS marks "
+                + "CROSS JOIN (SELECT any(dataset_id) AS dataset_id,any(producer_id) AS producer_id FROM "
+                + qualified(options.database, options.livePrefix + "storage_metadata") + ") AS identity WHERE marks.rowid>"
+                + "(SELECT ifNull(max(rowid),0) FROM " + highWater + " WHERE family='username_log')";
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(highWaterSql);
+        }
+        ok(sender, "Preserved all " + physicalRows + " username history rows using unique PlayPro rowids.");
+    }
+
+    private static String usernameLogInsertSql(MigrationOptions options) {
+        String source = qualified(options.sourceDatabase, options.sourcePrefix + "username_log");
+        String events = qualified(options.database, options.livePrefix + "event_data");
+        String storage = qualified(options.database, options.livePrefix + "storage_metadata");
+        return usernameLogInsertSql(source, events, storage);
+    }
+
+    static String usernameLogInsertSql(String source, String events, String storage) {
+        return "INSERT INTO " + events
+                + " (dataset_id,producer_id,producer_sequence,batch_id,batch_ordinal,family,rowid,time,uuid,user_name) "
+                + "SELECT identity.dataset_id,identity.producer_id,180,toUUID('00000000-0000-0000-0000-000000000180'),0,'username_log',"
+                + "if(duplicate_ordinal=1,source_rowid,max_source_rowid+source_ordinal),time,"
+                + "if(toString(uuid)='00000000-0000-0000-0000-000000000000','',toString(uuid)),user "
+                + "FROM (SELECT rowid AS source_rowid,time,uuid,user,"
+                + "row_number() OVER (PARTITION BY time,rowid ORDER BY toString(uuid),user) AS duplicate_ordinal,"
+                + "row_number() OVER (ORDER BY time,rowid,toString(uuid),user) AS source_ordinal,"
+                + "max(rowid) OVER () AS max_source_rowid FROM " + source + ") AS source_rows "
+                + "CROSS JOIN (SELECT any(dataset_id) AS dataset_id,any(producer_id) AS producer_id FROM " + storage + ") AS identity";
     }
 
     static void verifyOfficialLookupShapes(Connection connection, String database, String prefix) throws SQLException {

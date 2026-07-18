@@ -461,14 +461,25 @@ INSERT INTO __TARGET_TABLE_PREFIX__event_data
 )
 SELECT
     identity.dataset_id, identity.producer_id, 180, toUUID('00000000-0000-0000-0000-000000000180'), 0, 'username_log',
-    rowid, time, NULL, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+    if(duplicate_ordinal = 1, source_rowid, max_source_rowid + source_ordinal), time, NULL, 0, 0, NULL, 0, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, if(toString(uuid) = '00000000-0000-0000-0000-000000000000', '', toString(uuid)), user, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-FROM __SOURCE_TABLE_PREFIX__username_log
+FROM
+(
+    SELECT
+        rowid AS source_rowid,
+        time,
+        uuid,
+        user,
+        row_number() OVER (PARTITION BY time, rowid ORDER BY toString(uuid), user) AS duplicate_ordinal,
+        row_number() OVER (ORDER BY time, rowid, toString(uuid), user) AS source_ordinal,
+        max(rowid) OVER () AS max_source_rowid
+    FROM __SOURCE_TABLE_PREFIX__username_log
+) AS username_rows
 CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity;
 
 -- world
@@ -524,7 +535,7 @@ FROM
     UNION ALL SELECT 'sign', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__sign
     UNION ALL SELECT 'skull', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__skull
     UNION ALL SELECT 'user', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__user
-    UNION ALL SELECT 'username_log', ifNull(max(rowid), 0) FROM __SOURCE_TABLE_PREFIX__username_log
+    UNION ALL SELECT 'username_log', ifNull(max(rowid), 0) FROM __TARGET_TABLE_PREFIX__event_data WHERE family = 'username_log'
     UNION ALL SELECT 'world', ifNull(max(id), 0) FROM __SOURCE_TABLE_PREFIX__world
 ) AS marks
 CROSS JOIN (SELECT any(dataset_id) AS dataset_id, any(producer_id) AS producer_id FROM __TARGET_TABLE_PREFIX__storage_metadata) AS identity
@@ -564,7 +575,7 @@ FROM
     UNION ALL SELECT 'sign', count() FROM __SOURCE_TABLE_PREFIX__sign
     UNION ALL SELECT 'skull', count() FROM __SOURCE_TABLE_PREFIX__skull
     UNION ALL SELECT 'user', count() FROM __SOURCE_TABLE_PREFIX__user
-    UNION ALL SELECT 'username_log', uniqExact(tuple(time, rowid)) FROM __SOURCE_TABLE_PREFIX__username_log
+    UNION ALL SELECT 'username_log', count() FROM __SOURCE_TABLE_PREFIX__username_log
     UNION ALL SELECT 'world', uniqExact(id) FROM __SOURCE_TABLE_PREFIX__world
 ) AS source
 LEFT JOIN

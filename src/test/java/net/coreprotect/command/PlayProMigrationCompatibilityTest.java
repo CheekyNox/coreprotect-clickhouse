@@ -3,6 +3,7 @@ package net.coreprotect.command;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
@@ -93,6 +94,23 @@ class PlayProMigrationCompatibilityTest {
         assertArrayEquals(original, PlayProMetadataRepairCommand.restoreIsoBlob(storedValue));
     }
 
+    @Test
+    void preservesConflictingUsernameHistoryWithUniqueRowids() throws Exception {
+        String insertSql = PlayProMigrationCommand.usernameLogInsertSql("source", "events", "storage");
+        assertTrue(insertSql.contains("PARTITION BY time,rowid"));
+        assertTrue(insertSql.contains("max_source_rowid+source_ordinal"));
+
+        try (var stream = PlayProMigrationCommand.class.getResourceAsStream("/migration/playpro-clickhouse-migration.sql")) {
+            assertNotNull(stream);
+            String migrationSql = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            String skullSql = section(migrationSql, "-- skull", "-- user");
+            String usernameSql = section(migrationSql, "-- username_log", "-- world");
+            assertTrue(skullSql.contains("rowid, time"));
+            assertTrue(usernameSql.contains("PARTITION BY time, rowid"));
+            assertTrue(usernameSql.contains("max_source_rowid + source_ordinal"));
+        }
+    }
+
     private static int occurrences(String value, String needle) {
         int result = 0;
         int offset = 0;
@@ -101,5 +119,12 @@ class PlayProMigrationCompatibilityTest {
             offset += needle.length();
         }
         return result;
+    }
+
+    private static String section(String value, String start, String end) {
+        int startIndex = value.indexOf(start);
+        int endIndex = value.indexOf(end, startIndex + start.length());
+        assertTrue(startIndex >= 0 && endIndex > startIndex);
+        return value.substring(startIndex, endIndex);
     }
 }
