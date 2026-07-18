@@ -62,6 +62,10 @@ Do not run the normal in-place command again after the old tables have already
 been archived. The command will refuse to use PlayPro compatibility views as
 source tables.
 
+If `rebuild:true source-prefix:co_migrate_` says `co_migrate_*` is missing and
+lists normal `co_*` tables, the database is still in the pre-archive state. Run
+the normal in-place command instead.
+
 After success, stop the server immediately. Replace this fork jar with the
 official PlayPro/CoreProtect jar and keep:
 

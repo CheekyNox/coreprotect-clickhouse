@@ -236,8 +236,15 @@ public final class PlayProMigrationCommand {
             }
         }
         if (!missing.isEmpty()) {
-            throw new SQLException("Source database " + database + " is missing required tables: " + String.join(", ", missing)
-                    + similarTableHint(connection, database, sourcePrefix));
+            String message = "Source database " + database + " is missing required tables: " + String.join(", ", missing)
+                    + similarTableHint(connection, database, sourcePrefix);
+            if (options.rebuild && !options.sourcePrefix.equals(options.livePrefix)
+                    && hasPhysicalSourceTables(connection, options.database, options.livePrefix)) {
+                message += ". Old fork tables appear to still be live at " + options.database + "." + options.livePrefix
+                        + "*. Run without rebuild: /co migrate-playpro database:" + options.database
+                        + " prefix:" + options.livePrefix + " archive-prefix:" + options.archivePrefix;
+            }
+            throw new SQLException(message);
         }
         if (!views.isEmpty()) {
             String retry = "/co migrate-playpro database:" + options.database + " prefix:" + options.livePrefix + " rebuild:true source-prefix:" + options.archivePrefix;
@@ -256,6 +263,16 @@ public final class PlayProMigrationCommand {
         if (!existing.isEmpty()) {
             throw new SQLException("Archive tables already exist: " + String.join(", ", existing));
         }
+    }
+
+    private static boolean hasPhysicalSourceTables(Connection connection, String database, String prefix) throws SQLException {
+        for (String table : ARCHIVE_TABLES) {
+            String engine = tableEngine(connection, database, prefix + table);
+            if (engine == null || "View".equals(engine)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void bootstrapTargetSchema(Connection connection, MigrationOptions options) throws SQLException {
