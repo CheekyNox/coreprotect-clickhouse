@@ -330,7 +330,7 @@ public class Process {
                                             if (loggedIdentity[0] == null) {
                                                 loggedIdentity[0] = EntitySpawnStatement.insertIdentity(batch, interaction.getTime(), interaction.getEntityUuid(), interaction.getOrigin(), interaction.getCurrentLocation());
                                             }
-                                            identityActive[0] = EntityInteractionLogger.log(batch, loggedIdentity[0], interaction, logContext);
+                                            identityActive[0] = EntityInteractionLogger.log(batch, loggedIdentity[0], interaction, logContext, existingIdentity != null);
                                         });
                                     }
                                     catch (Exception e) {

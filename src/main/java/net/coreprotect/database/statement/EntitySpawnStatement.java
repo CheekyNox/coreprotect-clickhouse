@@ -222,7 +222,7 @@ public final class EntitySpawnStatement {
         }
 
         String keyColumn = byRowId ? "rowid" : "uuid";
-        String query = "SELECT rowid AS id,uuid,wid,origin_x,origin_y,origin_z FROM " + ConfigHandler.prefix + "entity_spawn WHERE " + keyColumn + " IN(" + placeholders + ")";
+        String query = "SELECT rowid AS id,uuid,wid,origin_x,origin_y,origin_z FROM " + ConfigHandler.prefix + "entity_spawn WHERE " + keyColumn + " IN(" + placeholders + ")" + (byRowId ? "" : " AND removed=0");
         try (PreparedStatement statement = connection.prepareStatement(query)) {
             for (int index = 0; index < ids.size(); index++) {
                 if (byRowId) {

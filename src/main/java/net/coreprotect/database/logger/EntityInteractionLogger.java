@@ -34,9 +34,9 @@ public final class EntityInteractionLogger {
         return event.isCancelled() ? null : new LogContext(event);
     }
 
-    public static boolean log(ConsumerWriteBatch batch, EntitySpawnIdentity identity, EntityInteraction interaction, LogContext context) throws Exception {
+    public static boolean log(ConsumerWriteBatch batch, EntitySpawnIdentity identity, EntityInteraction interaction, LogContext context, boolean checkpointIdentity) throws Exception {
         Location currentLocation = interaction.getCurrentLocation();
-        boolean identityActive = EntityInteractionStatement.checkpoint(batch, identity, currentLocation);
+        boolean identityActive = !checkpointIdentity || EntityInteractionStatement.checkpoint(batch, identity, currentLocation);
 
         int worldId = identity.getOriginalWorldId();
         int x = identity.getOriginalX();
