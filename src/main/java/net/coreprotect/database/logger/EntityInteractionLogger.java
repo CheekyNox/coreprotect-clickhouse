@@ -34,9 +34,11 @@ public final class EntityInteractionLogger {
         return event.isCancelled() ? null : new LogContext(event);
     }
 
-    public static void log(PreparedStatement interactionStatement, PreparedStatement checkpointStatement, EntitySpawnIdentity identity, EntityInteraction interaction, LogContext context) throws Exception {
+    public static void log(PreparedStatement interactionStatement, PreparedStatement checkpointStatement, EntitySpawnIdentity identity, EntityInteraction interaction, LogContext context, boolean checkpointIdentity) throws Exception {
         Location currentLocation = interaction.getCurrentLocation();
-        EntityInteractionStatement.checkpoint(checkpointStatement, identity, currentLocation);
+        if (checkpointIdentity) {
+            EntityInteractionStatement.checkpoint(checkpointStatement, identity, currentLocation);
+        }
 
         int worldId = identity.getOriginalWorldId();
         int x = identity.getOriginalX();

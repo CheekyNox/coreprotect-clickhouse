@@ -108,7 +108,7 @@ public class EntitySerializer {
 
     private static org.bukkit.entity.Entity deserializeEntityFromNbt(CompoundTag compound, World world, boolean preserveUUID, boolean preservePassengers) {
         int dataVersion = compound.getIntOr("DataVersion", 0);
-        compound = PlatformHooks.get().convertNBT(References.ENTITY, MinecraftServer.getServer().fixerUpper, compound, dataVersion, SharedConstants.getCurrentVersion().dataVersion().version()); // Paper - possibly use dataconverter
+        compound = PlatformHooks.get().convertNBT(References.ENTITY, MinecraftServer.getServer().getFixerUpper(), compound, dataVersion, SharedConstants.getCurrentVersion().dataVersion().version()); // Paper - possibly use dataconverter
         if (!preservePassengers) {
             compound.remove("Passengers");
         }
@@ -129,7 +129,7 @@ public class EntitySerializer {
             nmsEntity = net.minecraft.world.entity.EntityType.create(
                     TagValueInput.create(problemReporter, world.registryAccess(), compound),
                     world,
-                    net.minecraft.world.entity.EntitySpawnReason.LOAD
+                    new net.minecraft.world.entity.EntitySpawnRequest(net.minecraft.world.entity.EntitySpawnReason.LOAD, false)
             ).orElseThrow(() -> new IllegalArgumentException("An ID was not found for the data. Did you downgrade?"));
         }
 

@@ -315,7 +315,7 @@ public class Process {
                                             if (loggedIdentity[0] == null) {
                                                 loggedIdentity[0] = EntitySpawnStatement.insertIdentity(preparedStmtEntitySpawns, interaction.getTime(), interaction.getEntityUuid(), interaction.getOrigin(), interaction.getCurrentLocation());
                                             }
-                                            EntityInteractionLogger.log(preparedStmtEntityInteractions, preparedStmtEntityInteractionCheckpoints, loggedIdentity[0], interaction, logContext);
+                                            EntityInteractionLogger.log(preparedStmtEntityInteractions, preparedStmtEntityInteractionCheckpoints, loggedIdentity[0], interaction, logContext, existingIdentity != null);
                                         });
                                     }
                                     catch (Exception e) {
