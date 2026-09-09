@@ -14,6 +14,7 @@ import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.utility.BlockUtils;
 import net.coreprotect.utility.HopperTransactionUtils;
 import net.coreprotect.utility.ItemUtils;
+import net.coreprotect.utility.Validate;
 
 public final class HopperPushListener {
 
@@ -47,7 +48,9 @@ public final class HopperPushListener {
         }
 
         final Config config = Config.getConfig(location.getWorld());
-        HopperTransactionUtils.recordItemRemoved(HopperTransactionUtils.getTransactionId(location), movedItem);
+        if (Validate.isContainer(sourceHolder)) {
+            HopperTransactionUtils.recordItemRemoved(HopperTransactionUtils.getTransactionId(location), movedItem);
+        }
         HopperPullListener.flushPendingPull(destinationLocation, destinationInventory, destinationContainer);
         if (!config.ITEM_TRANSACTIONS) {
             return;
