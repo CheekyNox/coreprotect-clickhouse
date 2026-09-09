@@ -687,7 +687,7 @@ public class LookupRaw extends Queue {
 
             String actionPredicate = "";
             if (validAction) {
-                actionPredicate = buildActionPredicate(action, actionList, entityActionFilter);
+                actionPredicate = standardActionLookup ? buildActionPredicate(action, actionList, entityActionFilter) : "action IN(" + action + ")";
                 queryBlock = queryBlock + " " + actionPredicate + " AND";
             }
             else if (inventoryQuery || !actionExclude.isEmpty() || !includeBlock.isEmpty() || !includeEntity.isEmpty() || !excludeBlock.isEmpty() || !excludeEntity.isEmpty()) {
