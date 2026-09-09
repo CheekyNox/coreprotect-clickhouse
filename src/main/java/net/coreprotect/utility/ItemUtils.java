@@ -2,6 +2,7 @@ package net.coreprotect.utility;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Array;
+import java.lang.reflect.Method;
 import java.util.*;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
@@ -686,7 +687,8 @@ public class ItemUtils {
         }
 
         final ItemStack item = serializedItem.itemStack();
-        String displayName = item.hasItemMeta() && item.getItemMeta().hasDisplayName() ? item.getItemMeta().getDisplayName() : "";
+        ItemMeta itemMeta = item.hasItemMeta() ? item.getItemMeta() : null;
+        String displayName = itemMeta == null ? "" : getItemDisplayName(itemMeta);
         StringBuilder message = new StringBuilder(Color.ITALIC + displayName + Color.GREY);
 
         List<String> enchantments = ItemMetaHandler.getEnchantments(item, displayName);
@@ -795,6 +797,27 @@ public class ItemUtils {
         return "<hover:show_item:'" + escapeMiniMessageQuoted(itemKey) + "':" + amount + ">";
     }
     
+    private static String getItemDisplayName(ItemMeta itemMeta) {
+        try {
+            if (itemMeta.hasDisplayName()) {
+                return itemMeta.getDisplayName();
+            }
+
+            // The item_name component only exists on 1.20.5+, so access it reflectively.
+            Method hasItemName = itemMeta.getClass().getMethod("hasItemName");
+            if (Boolean.TRUE.equals(hasItemName.invoke(itemMeta))) {
+                Method getItemName = itemMeta.getClass().getMethod("getItemName");
+                Object name = getItemName.invoke(itemMeta);
+                return name == null ? "" : (String) name;
+            }
+        }
+        catch (Exception e) {
+            // item_name is not supported on this server version
+        }
+
+        return "";
+    }
+
     public static Map<Integer, Object> serializeItemStackLegacy(ItemStack itemStack, String faceData, int slot) {
         Map<Integer, Object> result = new HashMap<>();
         Map<String, Object> itemMap = serializeItemStack(itemStack, faceData, slot);
