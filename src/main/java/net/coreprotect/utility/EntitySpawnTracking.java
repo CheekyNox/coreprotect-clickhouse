@@ -22,6 +22,7 @@ import org.bukkit.TreeSpecies;
 import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Boat;
+import org.bukkit.entity.ChestedHorse;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -72,6 +73,10 @@ public final class EntitySpawnTracking {
 
     public static boolean isPlacedEntity(Entity entity) {
         return entity instanceof Boat || entity instanceof Minecart;
+    }
+
+    public static boolean isEntityContainer(Entity entity) {
+        return entity instanceof InventoryHolder && (isPlacedEntity(entity) || entity instanceof ChestedHorse && ((ChestedHorse) entity).isCarryingChest());
     }
 
     public static boolean isPlacedEntityType(EntityType type) {

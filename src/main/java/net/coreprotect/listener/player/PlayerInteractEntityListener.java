@@ -47,7 +47,7 @@ public final class PlayerInteractEntityListener extends Queue implements Listene
 
         Player player = event.getPlayer();
         final Entity entity = event.getRightClicked(); // change item in ItemFrame, etc
-        if (Boolean.TRUE.equals(ConfigHandler.inspecting.get(player.getName())) && EntitySpawnTracking.isPlacedEntity(entity) && entity instanceof InventoryHolder && Config.getConfig(player.getWorld()).ITEM_TRANSACTIONS) {
+        if (Boolean.TRUE.equals(ConfigHandler.inspecting.get(player.getName())) && EntitySpawnTracking.isEntityContainer(entity) && Config.getConfig(player.getWorld()).ITEM_TRANSACTIONS) {
             String playerUuid = player.getUniqueId().toString();
             long now = System.currentTimeMillis();
             Object[] previousInspection = PlayerInteractListener.lastInspectorEvent.get(playerUuid);

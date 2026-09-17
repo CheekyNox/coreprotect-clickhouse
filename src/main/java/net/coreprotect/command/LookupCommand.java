@@ -218,7 +218,7 @@ public class LookupCommand {
                 Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.MESSAGE_FILTER_TOO_SHORT, Integer.toString(MessageFilterParser.MINIMUM_FILTER_CODE_POINTS)));
                 return;
             }
-            if (argAction.isEmpty() || argAction.stream().anyMatch(action -> action != LookupActions.CHAT && action != LookupActions.COMMAND)) {
+            if (argAction.isEmpty() || argAction.stream().anyMatch(action -> action != LookupActions.CHAT && action != LookupActions.COMMAND && action != LookupActions.SIGN)) {
                 Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.INCOMPATIBLE_ACTION, "f:<filter>"));
                 return;
             }

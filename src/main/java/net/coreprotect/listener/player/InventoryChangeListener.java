@@ -482,7 +482,7 @@ public final class InventoryChangeListener extends Queue implements Listener {
     }
 
     private static void queueEntityContainerDelta(String user, Entity entity, ItemStack[] oldContents, ItemStack[] newContents) {
-        if (!EntitySpawnTracking.isTracked(entity)) {
+        if (!EntitySpawnTracking.isTracked(entity) && !EntitySpawnTracking.isEntityContainer(entity)) {
             return;
         }
         if (oldContents == null || newContents == null || ItemUtils.compareContainers(oldContents, newContents)) {
@@ -499,7 +499,7 @@ public final class InventoryChangeListener extends Queue implements Listener {
         }
 
         Entity entity = (Entity) holder;
-        return EntitySpawnTracking.isPlacedEntity(entity) && EntitySpawnTracking.isTracked(entity) ? entity : null;
+        return EntitySpawnTracking.isEntityContainer(entity) && (EntitySpawnTracking.isTracked(entity) || entity instanceof org.bukkit.entity.ChestedHorse) ? entity : null;
     }
 
     private static boolean isSupportedContainer(InventoryHolder holder) {
