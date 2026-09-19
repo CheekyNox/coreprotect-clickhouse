@@ -19,6 +19,7 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.DoubleChest;
 import org.bukkit.block.Hopper;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.ChestedHorse;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -29,6 +30,8 @@ import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.BlockInventoryHolder;
@@ -59,6 +62,7 @@ public final class InventoryChangeListener extends Queue implements Listener {
     protected static AtomicLong tasksCompleted = new AtomicLong();
     private static ConcurrentHashMap<String, Boolean> inventoryProcessing = new ConcurrentHashMap<>();
     private static final Map<UUID, PendingEntityContainerTransaction> pendingEntityTransactions = new HashMap<>();
+    private static final Map<UUID, OpenHorseContainer> openHorseContainers = new ConcurrentHashMap<>();
     private static final Object taskCompletionLock = new Object();
     private static final long TASK_WAIT_MAX_MS = 50; // Maximum wait time in milliseconds
 
@@ -302,6 +306,9 @@ public final class InventoryChangeListener extends Queue implements Listener {
 
         Entity entityContainer = getTrackedEntityContainer(PaperAdapter.ADAPTER.getHolder(inventory, false));
         if (entityContainer != null) {
+            if (entityContainer instanceof ChestedHorse) {
+                return; // Chested horse inventories are compared when the view closes.
+            }
             captureEntityContainerTransaction(player.getName(), entityContainer, inventory);
             return;
         }
@@ -504,6 +511,51 @@ public final class InventoryChangeListener extends Queue implements Listener {
 
     private static boolean isSupportedContainer(InventoryHolder holder) {
         return holder instanceof BlockInventoryHolder || holder instanceof DoubleChest || getTrackedEntityContainer(holder) != null;
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    protected void onInventoryOpen(InventoryOpenEvent event) {
+        if (!(event.getPlayer() instanceof Player)) {
+            return;
+        }
+        Inventory inventory = event.getInventory();
+        InventoryHolder holder = PaperAdapter.ADAPTER.getHolder(inventory, false);
+        if (!(holder instanceof ChestedHorse)) {
+            return;
+        }
+        ChestedHorse horse = (ChestedHorse) holder;
+        if (!horse.isCarryingChest() || !Config.getConfig(horse.getWorld()).ITEM_TRANSACTIONS) {
+            return;
+        }
+        Player player = (Player) event.getPlayer();
+        openHorseContainers.put(player.getUniqueId(), new OpenHorseContainer(player.getName(), horse, inventory.getContents()));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    protected void onInventoryClose(InventoryCloseEvent event) {
+        OpenHorseContainer opened = openHorseContainers.remove(event.getPlayer().getUniqueId());
+        if (opened == null) {
+            return;
+        }
+        opened.log(event.getInventory().getContents());
+    }
+
+    private static final class OpenHorseContainer {
+        private final String user;
+        private final ChestedHorse horse;
+        private final ItemStack[] contents;
+
+        private OpenHorseContainer(String user, ChestedHorse horse, ItemStack[] contents) {
+            this.user = user;
+            this.horse = horse;
+            this.contents = ItemUtils.getContainerState(contents);
+        }
+
+        private void log(ItemStack[] currentContents) {
+            if (horse.isValid()) {
+                queueEntityContainerDelta(user, horse, contents, currentContents);
+            }
+        }
     }
 
     private static final class PendingEntityContainerTransaction {
