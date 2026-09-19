@@ -203,6 +203,11 @@ public class BukkitAdapter implements BukkitInterface {
     }
 
     @Override
+    public String getItemName(ItemMeta itemMeta) {
+        return "";
+    }
+
+    @Override
     public Material getPlantSeeds(Material material) {
         switch (material) {
             case WHEAT:

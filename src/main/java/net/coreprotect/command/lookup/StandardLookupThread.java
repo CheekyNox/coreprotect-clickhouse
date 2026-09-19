@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import net.coreprotect.data.lookup.LookupResult;
 import net.coreprotect.data.lookup.result.ChatLookupResult;
@@ -61,8 +62,11 @@ import net.coreprotect.utility.MaterialUtils;
 import net.coreprotect.utility.StringUtils;
 import net.coreprotect.utility.WorldUtils;
 import net.coreprotect.utility.ErrorReporter;
+import net.coreprotect.utility.LookupThrottle;
 
 public class StandardLookupThread implements Runnable {
+    private static final AtomicBoolean SUMMARY_LOOKUP_ACTIVE = new AtomicBoolean(false);
+
     private final CommandSender player;
     private final Command command;
     private final List<String> rollbackUsers;
@@ -137,9 +141,21 @@ public class StandardLookupThread implements Runnable {
 
     @Override
     public void run() {
-        try (Connection connection = Database.getConnection(true)) {
-            ConfigHandler.lookupThrottle.put(player.getName(), new Object[] { true, System.currentTimeMillis() });
+        boolean summaryLookup = summary;
+        if (summaryLookup && !SUMMARY_LOOKUP_ACTIVE.compareAndSet(false, true)) {
+            Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.DATABASE_BUSY));
+            return;
+        }
 
+        if (!LookupThrottle.tryAcquire(player.getName(), 50)) {
+            if (summaryLookup) {
+                SUMMARY_LOOKUP_ACTIVE.set(false);
+            }
+            Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.DATABASE_BUSY));
+            return;
+        }
+
+        try (Connection connection = Database.getConnection(true)) {
             List<String> uuidList = new ArrayList<>();
             Integer entityContainerId = actions.contains(5) ? ConfigHandler.lookupEntityContainer.get(player.getName()) : null;
             if (!actions.contains(5)) {
@@ -592,8 +608,12 @@ public class StandardLookupThread implements Runnable {
         }
         catch (Exception e) {
             ErrorReporter.report(e);
-        } finally {
-            ConfigHandler.lookupThrottle.put(player.getName(), new Object[] { false, System.currentTimeMillis() });
+        }
+        finally {
+            if (summaryLookup) {
+                SUMMARY_LOOKUP_ACTIVE.set(false);
+            }
+            LookupThrottle.release(player.getName());
         }
     }
 

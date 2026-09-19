@@ -22,6 +22,7 @@ import org.bukkit.TreeSpecies;
 import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Boat;
+import org.bukkit.entity.ChestedHorse;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -36,6 +37,7 @@ import org.bukkit.persistence.PersistentDataType;
 import net.coreprotect.CoreProtect;
 import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.consumer.Queue;
+import net.coreprotect.listener.player.InventoryChangeListener;
 import net.coreprotect.model.entity.EntityInteractionOrigin;
 import net.coreprotect.model.entity.EntitySpawnData;
 import net.coreprotect.paper.PaperAdapter;
@@ -71,6 +73,10 @@ public final class EntitySpawnTracking {
 
     public static boolean isPlacedEntity(Entity entity) {
         return entity instanceof Boat || entity instanceof Minecart;
+    }
+
+    public static boolean isEntityContainer(Entity entity) {
+        return entity instanceof InventoryHolder && (isPlacedEntity(entity) || entity instanceof ChestedHorse && ((ChestedHorse) entity).isCarryingChest());
     }
 
     public static boolean isPlacedEntityType(EntityType type) {
@@ -670,7 +676,9 @@ public final class EntitySpawnTracking {
                     continue;
                 }
 
-                if (ConfigHandler.isFolia) {
+                // Folia grants the shutdown thread entity ownership after region ticking stops.
+                // Checkpoint owned entities directly: a newly scheduled task may never run during shutdown.
+                if (ConfigHandler.isFolia && !PaperAdapter.ADAPTER.isOwnedByCurrentRegion(entity)) {
                     completion = new CompletableFuture<>();
                     pending.add(completion);
                     CompletableFuture<Void> entityCompletion = completion;
@@ -1158,6 +1166,7 @@ public final class EntitySpawnTracking {
     }
 
     private static void checkpointLoadedEntity(UUID uuid, Entity entity) {
+        InventoryChangeListener.flushEntityContainer(entity);
         Location location = entity.getLocation();
         long[] updateEpoch = { -1L };
         trackedLocations.computeIfPresent(uuid, (key, tracked) -> {

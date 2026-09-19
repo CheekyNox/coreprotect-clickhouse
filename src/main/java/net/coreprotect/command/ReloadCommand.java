@@ -11,6 +11,7 @@ import net.coreprotect.thread.NetworkHandler;
 import net.coreprotect.utility.Chat;
 import net.coreprotect.utility.Color;
 import net.coreprotect.utility.ErrorReporter;
+import net.coreprotect.utility.LookupThrottle;
 
 public class ReloadCommand {
     protected static void runCommand(final CommandSender player, boolean permission, String[] args) {
@@ -23,14 +24,10 @@ public class ReloadCommand {
                 Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.PURGE_IN_PROGRESS));
                 return;
             }
-            if (ConfigHandler.lookupThrottle.get(player.getName()) != null) {
-                Object[] lookupThrottle = ConfigHandler.lookupThrottle.get(player.getName());
-                if ((boolean) lookupThrottle[0] || ((System.currentTimeMillis() - (long) lookupThrottle[1])) < 100) {
-                    Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.DATABASE_BUSY));
-                    return;
-                }
+            if (!LookupThrottle.tryAcquire(player.getName(), 100)) {
+                Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.DATABASE_BUSY));
+                return;
             }
-            ConfigHandler.lookupThrottle.put(player.getName(), new Object[] { true, System.currentTimeMillis() });
 
             class BasicThread implements Runnable {
                 @Override
@@ -59,14 +56,21 @@ public class ReloadCommand {
                     catch (Exception e) {
                         ErrorReporter.report(e);
                     }
-
-                    Consumer.isPaused = false;
-                    ConfigHandler.lookupThrottle.put(player.getName(), new Object[] { false, System.currentTimeMillis() });
+                    finally {
+                        Consumer.isPaused = false;
+                        LookupThrottle.release(player.getName());
+                    }
                 }
             }
-            Runnable runnable = new BasicThread();
-            Thread thread = new Thread(runnable);
-            thread.start();
+            try {
+                Runnable runnable = new BasicThread();
+                Thread thread = new Thread(runnable);
+                thread.start();
+            }
+            catch (RuntimeException | Error e) {
+                LookupThrottle.release(player.getName());
+                throw e;
+            }
         }
         else {
             Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.NO_PERMISSION));

@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.block.Block;
 import org.bukkit.entity.Creature;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemFrame;
@@ -46,7 +47,7 @@ public final class PlayerInteractEntityListener extends Queue implements Listene
 
         Player player = event.getPlayer();
         final Entity entity = event.getRightClicked(); // change item in ItemFrame, etc
-        if (Boolean.TRUE.equals(ConfigHandler.inspecting.get(player.getName())) && EntitySpawnTracking.isPlacedEntity(entity) && entity instanceof InventoryHolder && Config.getConfig(player.getWorld()).ITEM_TRANSACTIONS) {
+        if (Boolean.TRUE.equals(ConfigHandler.inspecting.get(player.getName())) && EntitySpawnTracking.isEntityContainer(entity) && Config.getConfig(player.getWorld()).ITEM_TRANSACTIONS) {
             String playerUuid = player.getUniqueId().toString();
             long now = System.currentTimeMillis();
             Object[] previousInspection = PlayerInteractListener.lastInspectorEvent.get(playerUuid);
@@ -98,7 +99,8 @@ public final class PlayerInteractEntityListener extends Queue implements Listene
             if (frame.getItem().getType() != Material.AIR && event.getHand().equals(EquipmentSlot.HAND) && Config.getConfig(player.getWorld()).PLAYER_INTERACTIONS) {
                 Material frameType = BukkitAdapter.ADAPTER.getFrameType(entity);
                 if (frameType != null) {
-                    Queue.queuePlayerInteraction(player.getName(), entity.getLocation().getBlock().getState(), frameType);
+                    Block block = entity.getLocation().getBlock();
+                    Queue.queuePlayerInteraction(player.getName(), block.getLocation(), frameType, block.getBlockData().getAsString());
                 }
             }
 

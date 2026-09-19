@@ -2,11 +2,14 @@ package net.coreprotect.database.lookup;
 
 import net.coreprotect.config.Config;
 import net.coreprotect.config.ConfigHandler;
+import net.coreprotect.database.statement.EntitySpawnStatement;
 import net.coreprotect.database.statement.UserStatement;
 import net.coreprotect.language.Phrase;
 import net.coreprotect.language.Selector;
 import net.coreprotect.listener.channel.PluginChannelListener;
 import net.coreprotect.model.action.LookupActions;
+import net.coreprotect.model.entity.EntitySpawnIdentity;
+import net.coreprotect.model.entity.EntitySpawnRecord;
 import net.coreprotect.utility.ChatUtils;
 import net.coreprotect.utility.Color;
 import net.coreprotect.utility.EntityUtils;
@@ -21,12 +24,29 @@ import org.bukkit.command.CommandSender;
 
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.List;
 import java.util.Locale;
 import java.util.StringJoiner;
+import java.util.UUID;
 
 public class BlockLookup {
 
     public static String performLookup(String command, Statement statement, BlockState block, CommandSender commandSender, int offset, int page, int limit) {
+        return performLookup(command, statement, block, commandSender, offset, page, limit, null);
+    }
+
+    public static String performEntityLookup(String command, Statement statement, BlockState block, CommandSender commandSender, int page, int limit, UUID entityUuid) {
+        try {
+            EntitySpawnIdentity identity = EntitySpawnStatement.loadIdentities(statement.getConnection(), List.of(entityUuid)).get(entityUuid);
+            return identity == null ? "" : performLookup(command, statement, block, commandSender, 0, page, limit, identity.getRowId());
+        }
+        catch (Exception e) {
+            ErrorReporter.report(e);
+            return "";
+        }
+    }
+
+    public static String performLookup(String command, Statement statement, BlockState block, CommandSender commandSender, int offset, int page, int limit, Integer entitySpawnRowId) {
         String resultText = "";
 
         try {
@@ -65,8 +85,23 @@ public class BlockLookup {
 
             String blockName = block.getType().name().toLowerCase(Locale.ROOT);
             String actionPredicate = "(action IN(0,1," + LookupActions.ENTITY_SPAWN + ") OR (action=" + LookupActions.ENTITY_KILL + " AND type IN(" + placedEntityTypeIds() + ")))";
+            String where = "wid = '" + worldId + "' AND x = '" + x + "' AND z = '" + z + "' AND y = '" + y + "' AND " + actionPredicate;
+            if (entitySpawnRowId != null) {
+                EntitySpawnRecord record = EntitySpawnStatement.loadRecords(statement.getConnection(), List.of(entitySpawnRowId)).get(entitySpawnRowId);
+                if (record == null || (record.getBlockRowId() <= 0 && record.getKillRowId() <= 0)) {
+                    return "";
+                }
+                StringJoiner rowIds = new StringJoiner(",");
+                if (record.getBlockRowId() > 0) {
+                    rowIds.add(Long.toString(record.getBlockRowId()));
+                }
+                if (record.getKillRowId() > 0) {
+                    rowIds.add(Integer.toString(record.getKillRowId()));
+                }
+                where = "rowid IN(" + rowIds + ") AND action IN(" + LookupActions.ENTITY_SPAWN + "," + LookupActions.ENTITY_KILL + ")";
+            }
 
-            String query = "SELECT count(*) over () as count, time,user,action,type,data,rolled_back FROM " + ConfigHandler.prefix + "block WHERE wid = '" + worldId + "' AND x = '" + x + "' AND z = '" + z + "' AND y = '" + y + "' AND " + actionPredicate + " AND time >= '" + checkTime + "' ORDER BY rowid DESC LIMIT " + limit + " OFFSET " + page_start;
+            String query = "SELECT count(*) over () as count, time,user,action,type,data,rolled_back FROM " + ConfigHandler.prefix + "block WHERE " + where + " AND time >= '" + checkTime + "' ORDER BY rowid DESC LIMIT " + limit + " OFFSET " + page_start;
 
             if (Config.getGlobal().SELECT_USE_FINAL) {
                 query += " SETTINGS final = 1";
@@ -101,9 +136,14 @@ public class BlockLookup {
                     String selector = Selector.FIRST;
                     String tag = Color.WHITE + "-";
                     if (resultAction == LookupActions.ENTITY_SPAWN) {
-                        phrase = Phrase.LOOKUP_ENTITY_SPAWN;
+                        phrase = EntitySpawnTracking.isPlacedEntityType(EntityUtils.getEntityType(resultType)) ? Phrase.LOOKUP_BLOCK : Phrase.LOOKUP_ENTITY_SPAWN;
                         selector = Selector.FIRST;
                         tag = Color.GREEN + "+";
+                    }
+                    else if (resultAction == LookupActions.ENTITY_KILL && EntitySpawnTracking.isPlacedEntityType(EntityUtils.getEntityType(resultType))) {
+                        phrase = Phrase.LOOKUP_BLOCK;
+                        selector = Selector.SECOND;
+                        tag = Color.RED + "-";
                     }
                     else if (resultAction == 2 || resultAction == 3) {
                         phrase = Phrase.LOOKUP_INTERACTION; // {clicked|killed}
@@ -169,7 +209,7 @@ public class BlockLookup {
 
             ConfigHandler.lookupPage.put(commandSender.getName(), page);
             ConfigHandler.lookupType.put(commandSender.getName(), 2);
-            ConfigHandler.lookupCommand.put(commandSender.getName(), x + "." + y + "." + z + "." + worldId + ".0." + limit);
+            ConfigHandler.lookupCommand.put(commandSender.getName(), x + "." + y + "." + z + "." + worldId + ".0." + limit + (entitySpawnRowId == null ? "" : "." + entitySpawnRowId));
         }
         catch (Exception e) {
             ErrorReporter.report(e);

@@ -218,7 +218,7 @@ public class LookupCommand {
                 Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.MESSAGE_FILTER_TOO_SHORT, Integer.toString(MessageFilterParser.MINIMUM_FILTER_CODE_POINTS)));
                 return;
             }
-            if (argAction.isEmpty() || argAction.stream().anyMatch(action -> action != LookupActions.CHAT && action != LookupActions.COMMAND)) {
+            if (argAction.isEmpty() || argAction.stream().anyMatch(action -> action != LookupActions.CHAT && action != LookupActions.COMMAND && action != LookupActions.SIGN)) {
                 Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.INCOMPATIBLE_ACTION, "f:<filter>"));
                 return;
             }
@@ -455,13 +455,17 @@ public class LookupCommand {
             }
 
             String bc = x + "." + y + "." + z + "." + wid + "." + lookupType + "." + re;
+            Integer entitySpawnRowId = type == 2 && data.length > 6 ? Integer.valueOf(data[6]) : null;
+            if (entitySpawnRowId != null) {
+                bc += "." + entitySpawnRowId;
+            }
             ConfigHandler.lookupCommand.put(player.getName(), bc);
 
             String world = WorldUtils.getWorldName(wid);
             final Block block = Bukkit.getServer().getWorld(world).getBlockAt(x, y, z);
             final BlockState blockState = block.getState();
 
-            Runnable runnable = new BlockLookupThread(player, command, block, blockState, page, re, type);
+            Runnable runnable = new BlockLookupThread(player, command, block, blockState, page, re, type, entitySpawnRowId);
             Thread thread = new Thread(runnable);
             thread.start();
         }

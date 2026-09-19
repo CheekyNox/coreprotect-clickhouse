@@ -20,6 +20,7 @@ import net.coreprotect.utility.BlockUtils;
 import net.coreprotect.utility.HopperTransactionUtils;
 import net.coreprotect.utility.ItemUtils;
 import net.coreprotect.utility.ErrorReporter;
+import net.coreprotect.utility.Validate;
 
 public final class HopperPullListener {
 
@@ -57,13 +58,14 @@ public final class HopperPullListener {
             return;
         }
 
-        Location destinationLocation = BlockUtils.getCanonicalContainerLocation(destinationInventory.getLocation(), destinationInventory);
-        if (destinationLocation == null) {
-            return;
-        }
-
         final Config config = Config.getConfig(location.getWorld());
-        HopperTransactionUtils.recordItemAdded(HopperTransactionUtils.getTransactionId(destinationLocation), movedItem);
+        if (Validate.isContainer(destinationHolder)) {
+            Location destinationLocation = BlockUtils.getCanonicalContainerLocation(destinationInventory.getLocation(), destinationInventory);
+            if (destinationLocation == null) {
+                return;
+            }
+            HopperTransactionUtils.recordItemAdded(HopperTransactionUtils.getTransactionId(destinationLocation), movedItem);
+        }
         if (!config.ITEM_TRANSACTIONS) {
             return;
         }

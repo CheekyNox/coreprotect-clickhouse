@@ -40,6 +40,8 @@ HELP_ACTION_2: "Например: [a:block], [a:+block], [a:-block] [a:click], [
 HELP_COMMAND: "Показать подробную информацию о команде."
 HELP_EXCLUDE_1: "Исключить блоки или пользователей."
 HELP_EXCLUDE_2: "Например: [e:stone], [e:Notch], [e:stone,Notch]"
+HELP_FILTER_1: "Фильтр текста чата, команд или табличек."
+HELP_FILTER_2: "Например: [a:command f:/co], [a:sign f:-Shop]"
 HELP_HEADER: "{0} Справка"
 HELP_INCLUDE_1: "Включить определённые блоки или сущности."
 HELP_INCLUDE_2: "Например: [i:stone], [i:zombie], [i:stone,wood,bedrock]"

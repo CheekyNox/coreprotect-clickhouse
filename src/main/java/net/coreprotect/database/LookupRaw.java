@@ -687,7 +687,7 @@ public class LookupRaw extends Queue {
 
             String actionPredicate = "";
             if (validAction) {
-                actionPredicate = buildActionPredicate(action, actionList, entityActionFilter);
+                actionPredicate = standardActionLookup ? buildActionPredicate(action, actionList, entityActionFilter) : "action IN(" + action + ")";
                 queryBlock = queryBlock + " " + actionPredicate + " AND";
             }
             else if (inventoryQuery || !actionExclude.isEmpty() || !includeBlock.isEmpty() || !includeEntity.isEmpty() || !excludeBlock.isEmpty() || !excludeEntity.isEmpty()) {
@@ -934,7 +934,13 @@ public class LookupRaw extends Queue {
         for (String rawFilter : messageFilters) {
             String filter = rawFilter == null ? "" : rawFilter.trim();
             if (!filter.isEmpty()) {
-                result.append(" AND lowerUTF8(message) LIKE '%").append(escapeSqlLike(filter.toLowerCase(Locale.ROOT))).append("%'");
+                boolean exclude = filter.startsWith("-");
+                if (exclude) {
+                    filter = filter.substring(1);
+                }
+                String pattern = escapeSqlLike(filter.toLowerCase(Locale.ROOT));
+                result.append(exclude ? " AND (message IS NULL OR lowerUTF8(message) NOT LIKE '%" : " AND lowerUTF8(message) LIKE '%")
+                        .append(pattern).append(exclude ? "%')" : "%'");
             }
         }
         return result.toString();
@@ -952,13 +958,21 @@ public class LookupRaw extends Queue {
                 continue;
             }
 
+            boolean exclude = filter.startsWith("-");
+            if (exclude) {
+                filter = filter.substring(1);
+            }
             String escaped = escapeSqlLike(filter.toLowerCase(Locale.ROOT));
             result.append(" AND (");
             for (int line = 1; line <= 8; line++) {
                 if (line > 1) {
-                    result.append(" OR ");
+                    result.append(exclude ? " AND " : " OR ");
                 }
-                result.append("lowerUTF8(line_").append(line).append(") LIKE '%").append(escaped).append("%'");
+                if (exclude) {
+                    result.append("(line_").append(line).append(" IS NULL OR ");
+                }
+                result.append("lowerUTF8(line_").append(line).append(exclude ? ") NOT LIKE '%" : ") LIKE '%")
+                        .append(escaped).append(exclude ? "%')" : "%'");
             }
             result.append(")");
         }
